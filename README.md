@@ -1,0 +1,19 @@
+# Finance
+
+**TODO: Add description**
+
+## Installation
+
+If [available in Hex](https://hex.pm/docs/publish), the package can be installed as:
+
+  1. Add finance to your list of dependencies in `mix.exs`:
+
+        def deps do
+          [{:finance, "~> 0.0.1"}]
+        end
+
+  2. Ensure finance is started before your application:
+
+        def application do
+          [applications: [:finance]]
+        end
