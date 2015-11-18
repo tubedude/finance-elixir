@@ -1,0 +1,1 @@
+sidebarNodes={"exceptions":[],"extras":[{"id":"extra-api-reference","title":"API Reference","headers":[]}],"modules":[{"id":"Finance","title":"Finance","functions":[{"id":"xirr/2","anchor":"xirr/2"}],"types":[{"id":"rate/0","anchor":"t:rate/0"}]}],"protocols":[]}
