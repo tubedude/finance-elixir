@@ -1,4 +1,5 @@
 # Finance
+[![Build Status](https://travis-ci.org/tubedude/finance-elixir.svg?branch=master)](https://travis-ci.org/tubedude/finance-elixir)
 
 A library to calculate Xirr through the bisection method using parallel processes.
 
