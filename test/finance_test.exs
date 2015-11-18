@@ -86,7 +86,7 @@ defmodule FinanceTest do
       305.6,
       500.0
     ]
-    assert Finance.xirr(d,v) == {:error, "Date and Value collections size don't match."}
+    assert Finance.xirr(d,v) == {:error, "Date and Value collections must have the same size"}
   end
 
   test "xirr/2 wrong values" do
