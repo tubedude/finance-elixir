@@ -23,12 +23,15 @@ defmodule Finance do
       {:ok, 21.118359}
   """
   @spec xirr(list, list) :: rate
+
+  def xirr(dates, values) when length(dates) != length(values) do
+    {:error, "Date and Value collections must have the same size"}
+  end
+
   def xirr(dates, values) do
     cond do
       !verify_flow(values) ->
         {:error, "Values should have at least one positive or negative value."}
-      length(dates) - length(values) != 0 ->
-        {:error, "Date and Value collections size don't match."}
       length(dates) - length(values) == 0 && verify_flow(values) ->
         dates = dates
         |> pmap(&Date.from/1)
@@ -109,6 +112,7 @@ defmodule Finance do
     tries = tries + 1
     calculate :xirr, dates_values, acc, rate, bottom, upper, tries
   end
+
 
 end # defmodule Finance
 
