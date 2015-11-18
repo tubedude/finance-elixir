@@ -1,10 +1,10 @@
 # Finance
 
-**TODO: Add description**
+A library to calculate Xirr through the bisection method using parallel processes.
 
 ## Installation
 
-If [available in Hex](https://hex.pm/docs/publish), the package can be installed as:
+The package can be installed as:
 
   1. Add finance to your list of dependencies in `mix.exs`:
 
@@ -17,3 +17,7 @@ If [available in Hex](https://hex.pm/docs/publish), the package can be installed
         def application do
           [applications: [:finance]]
         end
+
+## Documentation
+
+ The Documentation is available in [hexdocs.pm](http://hexdocs.pm/finance/0.0.1/extra-api-reference.html)
