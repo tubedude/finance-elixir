@@ -2,9 +2,32 @@ defmodule FinanceTest do
   use ExUnit.Case, async: true
   doctest Finance
 
-  test "the truth" do
-    assert 1 + 1 == 2
+
+  # Finance.Newthon
+
+  test "Finance.Newthon.solve/3" do
+    f = fn(x) -> :math.pow(x,2) - 10*x + 5 end
+    {:ok, x} = Finance.Newthon.solve(f,-3,3)
+    assert ((x - 0.52) < 0.01)
   end
+
+  # Finance.TimeValue
+
+  test "discount factor over a year" do
+    d1 = Timex.Date.from {2014, 1, 1}
+    d2 = Timex.Date.from {2015, 1, 1}
+    assert Finance.TimeValue.date_diff(d1, d2) == 365
+    assert Finance.TimeValue.discount_factor(d1, d2, 0.1) == 1.1
+  end
+
+  test "present value of a single cashflow" do
+    present_date= Timex.Date.from {2014, 1, 1}
+    future_date = Timex.Date.from {2015, 1, 1}
+    value = 100.0
+    rate = 0.10
+    cf = Finance.Cashflow.new future_date, value
+    assert round(Finance.TimeValue.pv(cf, present_date, rate)) == 91.0
+  end 
 
   def multiply(integer) do
     integer * 2
