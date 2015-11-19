@@ -2,8 +2,13 @@ defmodule FinanceTest do
   use ExUnit.Case, async: true
   doctest Finance
 
-  test "the truth" do
-    assert 1 + 1 == 2
+
+  # Finance.Newthon
+
+  test "Finance.Newthon.solve/3" do
+    f = fn(x) -> :math.pow(x,2) - 10*x + 5 end
+    {:ok, x} = Finance.Newthon.solve(f,-3,3)
+    assert ((x - 0.52) < 0.01)
   end
 
   def multiply(integer) do

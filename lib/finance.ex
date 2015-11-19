@@ -3,16 +3,16 @@ defmodule Finance do
   @moduledoc """
   Library to calculate IRR through the Bisection method.
   """
-    defp pmap(collection, function) do
-      me = self
-      collection
-      |> Enum.map(fn (element) -> spawn_link fn -> (send me, { self, function.(element) }) end end)
-      |> Enum.map(fn (pid) -> receive do { ^pid, result } -> result end end)
-    end
+  defp pmap(collection, function) do
+    me = self
+    collection
+    |> Enum.map(fn (element) -> spawn_link fn -> (send me, { self, function.(element) }) end end)
+    |> Enum.map(fn (pid) -> receive do { ^pid, result } -> result end end)
+  end
 
-    defp xirr_reduction({period, value, rate}),
-    do: value / :math.pow(1 + rate, period)
-
+  defp xirr_reduction({period, value, rate}) do
+    value / :math.pow(1 + rate, period)
+  end
 
   @type rate :: float
 
@@ -25,7 +25,8 @@ defmodule Finance do
   @spec xirr(list, list) :: rate
 
   def xirr(dates, values) when length(dates) != length(values) do
-    {:error, "Date and Value collections must have the same size"}
+    {:error, 
+      "Date and Value collections must have the same size"}
   end
 
   def xirr(dates, values) do
@@ -112,7 +113,4 @@ defmodule Finance do
     tries = tries + 1
     calculate :xirr, dates_values, acc, rate, bottom, upper, tries
   end
-
-
 end # defmodule Finance
-
