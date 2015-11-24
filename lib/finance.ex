@@ -1,18 +1,81 @@
+defmodule Finance.Cashflow do
+  defstruct [:date, :value]
+end
+
+defmodule Finance.Solver do
+  def solve(f, a, b, tol, iters) when abs(b - a) < tol do
+    {:ok, (a + b) / 2}
+  end
+
+  def solve(f, a, b, tol, iters) when iters == 0 do
+    {:error, "Solver did not converge!"}
+  end
+
+  def solve(f, a, b, tol, iters) do
+    m = (a + b) / 2
+    fm = f.(m)
+    fa = f.(a)
+    fb = f.(b)
+    cond do
+      fa == 0 -> {:ok, fa}
+      fb == 0 -> {:ok, fb}
+      fm == 0 -> {:ok, fm}
+      (fa * fm < 0) -> solve(f, a, m, tol, iters-1)
+      (fm * fb < 0) -> solve(f, m, b, tol, iters-1)
+      true ->
+        {:error, "No root in interval"}
+    end
+  end
+end
+
 defmodule Finance do
   alias Timex.Date
   @moduledoc """
   Library to calculate IRR through the Bisection method.
   """
-    defp pmap(collection, function) do
-      me = self
-      collection
-      |> Enum.map(fn (element) -> spawn_link fn -> (send me, { self, function.(element) }) end end)
-      |> Enum.map(fn (pid) -> receive do { ^pid, result } -> result end end)
-    end
+  defp pmap(collection, function) do
+    me = self
+    collection
+    |> Enum.map(fn (element) -> spawn_link fn -> (send me, { self, function.(element) }) end end)
+    |> Enum.map(fn (pid) -> receive do { ^pid, result } -> result end end)
+  end
 
-    defp xirr_reduction({period, value, rate}),
-    do: value / :math.pow(1 + rate, period)
+  defp xirr_reduction({period, value, rate}), do: pv(value, period, rate)
 
+  # Utility functions
+
+  def date_diff(date_present, date_future) do
+    (Date.to_days(date_future) - Date.to_days(date_present)) / 365.0
+  end
+
+  # Present value functions
+
+  def pv(value, %Timex.DateTime{} = date_present, %Timex.DateTime{} = date_future, rate)
+      when is_number(value) and is_number(rate) do
+    pv(value, date_diff(date_present, date_future), rate)
+  end
+
+  def pv(value, nper, rate)
+      when is_number(value) and is_number(nper) do
+    value / :math.pow(1 + rate, nper)
+  end
+
+  def pv(%Finance.Cashflow{} = cashflow, %Timex.DateTime{} = date_present, rate) 
+      when is_number(rate) do
+    pv(cashflow.value, date_present, cashflow.date, rate)
+  end
+
+  def pv(cashflows, %Timex.DateTime{} = date_present, rate) 
+      when is_list(cashflows) and is_number(rate) do
+    Enum.sum (cashflows |> Enum.map &pv(&1, date_present, rate))
+  end
+
+  # IRR
+
+  def irr(cashflows, date_present) do
+    f = fn(rate) -> pv(cashflows, date_present, rate) end
+    Finance.Solver.solve f, -0.999, 10, 0.001, 100
+  end
 
   @type rate :: float
 

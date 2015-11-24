@@ -10,6 +10,21 @@ defmodule FinanceTest do
     integer * 2
   end
 
+  test "irr" do
+    
+    cf0 = %Finance.Cashflow{date: Timex.Date.from({2013, 6, 1}), value: -100.0}
+    cf2 = %Finance.Cashflow{date: Timex.Date.from({2014, 6, 1}), value: 200.0}
+
+    IO.puts inspect(Finance.irr([cf0, cf2], Timex.Date.from({2013, 1, 1})))
+
+
+  end
+
+  test "Finance.Solver.solve/5" do
+    f = fn(x) -> 10 - x end
+    IO.puts inspect(Finance.Solver.solve(f, -20, 20, 0.00001, 100))
+  end
+
   test "xirr/2 xichen27" do
     d = [{2014,04,15},{2014,05,15},{2014,10,19}]
     v = [-10000.0,305.6,500.0]
