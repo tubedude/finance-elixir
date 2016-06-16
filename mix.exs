@@ -3,12 +3,13 @@ defmodule Finance.Mixfile do
 
   def project do
     [app: :finance,
-     version: "0.0.1",
-     elixir: "~> 1.1",
-     build_embedded: Mix.env == :prod,
-     start_permanent: Mix.env == :prod,
-     description: "A library to calculate Xirr through the bisection method using parallel processes.",
-     deps: deps]
+    version: "0.0.1",
+    elixir: "~> 1.1",
+    build_embedded: Mix.env == :prod,
+    start_permanent: Mix.env == :prod,
+    description: "A library to calculate Xirr through the bisection method using parallel processes.",
+    test_coverage: [tool: ExCoveralls],
+    deps: deps]
   end
 
   def application do
@@ -36,7 +37,8 @@ defmodule Finance.Mixfile do
       {:timex, "~> 1.0.0-rc2"},
       {:earmark, "~> 0.1", only: :dev},
       {:ex_doc, "~> 0.10", only: :dev},
-      # {:credo, "~> 0.1.0"}
+      {:excoveralls, "~> 0.4", only: :test},
+      {:credo, "~> 0.1.0"}
     ]
   end
 end

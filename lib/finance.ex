@@ -3,43 +3,42 @@ defmodule Finance do
   @moduledoc """
   Library to calculate IRR through the Bisection method.
   """
-    defp pmap(collection, function) do
-      me = self
-      collection
-      |> Enum.map(fn (element) -> spawn_link fn -> (send me, { self, function.(element) }) end end)
-      |> Enum.map(fn (pid) -> receive do { ^pid, result } -> result end end)
-    end
-
-    defp xirr_reduction({period, value, rate}),
-    do: value / :math.pow(1 + rate, period)
-
 
   @type rate :: float
+  @type date :: Date.t
+
+  defp pmap(collection, function) do
+    me = self
+    collection
+    |> Enum.map(fn (element) -> spawn_link fn -> (send me, { self, function.(element) }) end end)
+    |> Enum.map(fn (pid) -> receive do { ^pid, result } -> result end end)
+  end
+
+  defp xirr_reduction({period, value, rate}),
+  do: value / :math.pow(1 + rate, period)
 
   @doc """
-      iex> d = [{2015, 11, 1}, {2015,10,1}, {2015,6,1}]
-      iex> v = [-800_000, -2_200_000, 1_000_000]
-      iex> Finance.xirr(d,v) 
-      {:ok, 21.118359}
+  iex> d = [{2015, 11, 1}, {2015,10,1}, {2015,6,1}]
+  iex> v = [-800_000, -2_200_000, 1_000_000]
+  iex> Finance.xirr(d,v) 
+  {:ok, 21.118359}
   """
-  @spec xirr(list, list) :: rate
-
+  @spec xirr([date], [number]) :: rate
   def xirr(dates, values) when length(dates) != length(values) do
     {:error, "Date and Value collections must have the same size"}
   end
-
   def xirr(dates, values) do
-    cond do
-      !verify_flow(values) ->
-        {:error, "Values should have at least one positive or negative value."}
-      length(dates) - length(values) == 0 && verify_flow(values) ->
-        dates = dates
-        |> pmap(&Date.from/1)
+    dates = dates
+            |> pmap(&Date.from/1)
         min_date = Enum.min(dates)
         {dates, values, dates_values} = compact_flow(Enum.zip(dates, values), Date.to_days(min_date)) 
-        calculate :xirr, dates_values, [], guess_rate(dates, values), -1.0, +1.0, 0
-      true -> {:error, "Uncaught error"}
-    end
+        cond do
+          !verify_flow(values) ->
+            {:error, "Values should have at least one positive or negative value."}
+          length(dates) - length(values) == 0 && verify_flow(values) ->
+            calculate :xirr, dates_values, [], guess_rate(dates, values), -1.0, +1.0, 0
+            true -> {:error, "Uncaught error"}
+        end
   end # def xirr
 
   defp compact_flow(dates_values, min_date) do
@@ -54,14 +53,16 @@ defmodule Finance do
 
   defp verify_flow(values) do
     Enum.any?(values, fn(x) -> x > 0 end) &&
-      Enum.any?(values, fn(x) -> x < 0 end)
+    Enum.any?(values, fn(x) -> x < 0 end)
   end
 
-  @spec guess_rate(list, list ) :: rate
+  @spec guess_rate([date], [number] ) :: rate
   defp guess_rate(dates, values) do
     {min_value, max_value} = Enum.min_max(values)
-    period = length(dates) - 1
-    Float.round(:math.pow(1 + abs(max_value / min_value) , 1 / period) - 1 , 3)
+    period = 1 / (length(dates) - 1)
+    rate = 1 + abs(max_value / min_value)
+    :math.pow(rate, period) - 1
+    |> Float.round(3)
   end
 
   defp reached_boundry(rate, upper),
@@ -79,15 +80,15 @@ defmodule Finance do
   defp reduce_date_values(dates_values, rate) do
     acc = Dict.to_list(dates_values)
     |> pmap(fn (x) ->
-      {
-        elem(x,0),
-        elem(x,1),
-        rate
+        {
+          elem(x,0),
+          elem(x,1),
+          rate
         } end)
-    |> pmap(&(xirr_reduction/1))
-    |> Enum.sum
-    |> Float.round(4)
-    acc * first_value_sign(dates_values)
+      |> pmap(&(xirr_reduction/1))
+      |> Enum.sum
+      |> Float.round(4)
+        acc * first_value_sign(dates_values)
   end
 
   defp calculate(:xirr, _           , 0.0 , rate, _     , _     , _  ), do: {:ok, Float.round(rate,6) }
@@ -107,7 +108,7 @@ defmodule Finance do
       acc > 0 && !reached_boundry(rate, upper) ->
         bottom = rate
         rate = (rate + upper) / 2
-      acc == 0.0 -> rate
+        acc == 0.0 -> rate
     end
     tries = tries + 1
     calculate :xirr, dates_values, acc, rate, bottom, upper, tries
