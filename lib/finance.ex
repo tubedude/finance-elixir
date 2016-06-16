@@ -18,10 +18,10 @@ defmodule Finance do
   do: value / :math.pow(1 + rate, period)
 
   @doc """
-  iex> d = [{2015, 11, 1}, {2015,10,1}, {2015,6,1}]
-  iex> v = [-800_000, -2_200_000, 1_000_000]
-  iex> Finance.xirr(d,v) 
-  {:ok, 21.118359}
+    iex> d = [{2015, 11, 1}, {2015,10,1}, {2015,6,1}]
+    iex> v = [-800_000, -2_200_000, 1_000_000]
+    iex> Finance.xirr(d,v) 
+    {:ok, 21.118359}
   """
   @spec xirr([date], [number]) :: rate
   def xirr(dates, values) when length(dates) != length(values) do
