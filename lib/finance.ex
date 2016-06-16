@@ -10,8 +10,8 @@ defmodule Finance do
   defp pmap(collection, function) do
     me = self
     collection
-    |> Enum.map(fn (element) -> spawn_link fn -> (send me, { self, function.(element) }) end end)
-    |> Enum.map(fn (pid) -> receive do { ^pid, result } -> result end end)
+    |> Enum.map(fn (element) -> spawn_link fn -> (send me, {self, function.(element)}) end end)
+    |> Enum.map(fn (pid) -> receive do {^pid, result} -> result end end)
   end
 
   defp xirr_reduction({period, value, rate}),
@@ -48,7 +48,7 @@ defmodule Finance do
 
   defp organize_value(date_value, dict, min_date) do
     {date, value} = date_value
-    Dict.update(dict, ((Date.to_days(date) - min_date) / 365.0) , value, &(value + &1) )
+    Dict.update(dict, ((Date.to_days(date) - min_date) / 365.0) , value, &(value + &1))
   end
 
   defp verify_flow(values) do
@@ -56,13 +56,13 @@ defmodule Finance do
     Enum.any?(values, fn(x) -> x < 0 end)
   end
 
-  @spec guess_rate([date], [number] ) :: rate
+  @spec guess_rate([date], [number]) :: rate
   defp guess_rate(dates, values) do
     {min_value, max_value} = Enum.min_max(values)
     period = 1 / (length(dates) - 1)
-    rate = 1 + abs(max_value / min_value)
-    :math.pow(rate, period) - 1
-    |> Float.round(3)
+    multiple = 1 + abs(max_value / min_value)
+    rate = :math.pow(multiple, period) - 1
+    Float.round(rate, 3)
   end
 
   defp reached_boundry(rate, upper),
@@ -74,11 +74,13 @@ defmodule Finance do
     cond do
       first_value < 0 -> 1
       first_value > 0 -> -1
+      true -> 0
     end
   end
 
   defp reduce_date_values(dates_values, rate) do
-    acc = Dict.to_list(dates_values)
+    list = Dict.to_list(dates_values)
+    acc = list
     |> pmap(fn (x) ->
         {
           elem(x,0),
@@ -91,10 +93,10 @@ defmodule Finance do
         acc * first_value_sign(dates_values)
   end
 
-  defp calculate(:xirr, _           , 0.0 , rate, _     , _     , _  ), do: {:ok, Float.round(rate,6) }
-  defp calculate(:xirr, _           , _   , -1.0, _     , _     , _  ), do: {:error, "Could not converge"}
+  defp calculate(:xirr, _           , 0.0 , rate, _     , _     , _), do: {:ok, Float.round(rate,6)}
+  defp calculate(:xirr, _           , _   , -1.0, _     , _     , _), do: {:error, "Could not converge"}
   # defp calculate(:xirr, _           , _   , _   , _     , _     , 300), do:  {:error, "I give up"}
-  defp calculate(:xirr, dates_values, _   , rate, bottom, upper , tries )  do
+  defp calculate(:xirr, dates_values, _   , rate, bottom, upper , tries) do
     acc = reduce_date_values(dates_values, rate)
     # IO.inspect "#{acc}; #{rate}; #{bottom}; #{upper}"
     cond do
