@@ -2,12 +2,14 @@ defmodule FinanceTest do
   use ExUnit.Case, async: true
   doctest Finance
 
-  test "the truth" do
-    assert 1 + 1 == 2
-  end
-
   def multiply(integer) do
     integer * 2
+  end
+
+  test "xirr/2 positive and negative flow in the same day" do
+    d = [{2014,04,15},{2014,04,15},{2014,10,19}]
+    v = [-10000.0,10000.0,500.0]
+    assert Finance.xirr(d,v) == {:error, "Values should have at least one positive or negative value."}    
   end
 
   test "xirr/2 xichen27" do
