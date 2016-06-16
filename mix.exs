@@ -4,7 +4,7 @@ defmodule Finance.Mixfile do
   def project do
     [app: :finance,
      version: "0.0.2",
-     elixir: "~> 1.2",
+     elixir: "~> 1.1",
      build_embedded: Mix.env == :prod,
      start_permanent: Mix.env == :prod,
      description: "A library to calculate Xirr through the bisection method using parallel processes.",
