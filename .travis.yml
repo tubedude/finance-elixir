@@ -5,6 +5,9 @@ elixir:
 otp_release:
   - 18.1
   - 17.4
+env:
+  - MIX_ENV=test
 script:
-  - "MIX_ENV=test mix do deps.get, test && mix coveralls.travis"
+  - mix test
+  - mix coveralls.travis
 
