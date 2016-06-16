@@ -3,13 +3,15 @@ defmodule Finance.Mixfile do
 
   def project do
     [app: :finance,
-     version: "0.0.1",
+     version: "0.0.2",
      elixir: "~> 1.2",
      build_embedded: Mix.env == :prod,
      start_permanent: Mix.env == :prod,
      description: "A library to calculate Xirr through the bisection method using parallel processes.",
      test_coverage: [tool: ExCoveralls],
      preferred_cli_env: ["coveralls": :test, "coveralls.detail": :test, "coveralls.post": :test, "coveralls.html": :test],
+     package: package,
+     description: description,
      deps: deps]
   end
 

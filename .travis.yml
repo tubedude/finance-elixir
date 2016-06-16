@@ -7,7 +7,5 @@ otp_release:
   - 17.4
 env:
   - MIX_ENV=test
-script:
-  - mix test
-  - mix coveralls.travis
+script: mix coveralls.travis
 
