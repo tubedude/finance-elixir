@@ -36,7 +36,7 @@ defmodule Finance.Mixfile do
 
   defp deps do
     [
-      {:timex, "~> 2.1"},
+      {:timex, "~> 3.1"},
       {:earmark, "~> 0.2", only: :dev},
       {:ex_doc, "~> 0.12", only: :dev},
       {:excoveralls, "~> 0.5.4", only: :test},

@@ -1,5 +1,5 @@
 defmodule Finance do
-  alias Timex.Date
+  alias Timex
   @moduledoc """
   Library to calculate IRR through the Bisection method.
   """
@@ -20,7 +20,7 @@ defmodule Finance do
   @doc """
     iex> d = [{2015, 11, 1}, {2015,10,1}, {2015,6,1}]
     iex> v = [-800_000, -2_200_000, 1_000_000]
-    iex> Finance.xirr(d,v) 
+    iex> Finance.xirr(d,v)
     { :ok, 21.118359 }
   """
   @spec xirr([date], [number]) :: rate
@@ -29,9 +29,9 @@ defmodule Finance do
   end
   def xirr(dates, values) do
     dates = dates
-            |> pmap(&Date.from/1)
+            |> pmap(&Timex.to_date/1)
         min_date = Enum.min(dates)
-        {dates, values, dates_values} = compact_flow(Enum.zip(dates, values), Date.to_days(min_date)) 
+        {dates, values, dates_values} = compact_flow(Enum.zip(dates, values), Timex.diff(min_date, ~D[1970-01-01], :days))
         cond do
           !verify_flow(values) ->
             {:error, "Values should have at least one positive or negative value."}
@@ -48,7 +48,7 @@ defmodule Finance do
 
   defp organize_value(date_value, dict, min_date) do
     {date, value} = date_value
-    Dict.update(dict, ((Date.to_days(date) - min_date) / 365.0) , value, &(value + &1))
+    Dict.update(dict, ((Timex.diff(date,~D[1970-01-01], :days) - min_date) / 365.0) , value, &(value + &1))
   end
 
   defp verify_flow(values) do
