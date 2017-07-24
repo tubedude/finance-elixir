@@ -39,8 +39,7 @@ defmodule Finance.Mixfile do
       {:timex, "~> 3.1"},
       {:earmark, "~> 0.2", only: :dev},
       {:ex_doc, "~> 0.12", only: :dev},
-      {:excoveralls, "~> 0.5.4", only: :test},
-      {:credo, "~> 0.4"}
+      {:excoveralls, "~> 0.5.4", only: :test}
     ]
   end
 end
