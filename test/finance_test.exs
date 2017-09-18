@@ -9,7 +9,7 @@ defmodule FinanceTest do
   test "xirr/2 positive and negative flow in the same day" do
     d = [{2014,04,15},{2014,04,15},{2014,10,19}]
     v = [-10000.0,10000.0,500.0]
-    assert Finance.xirr(d,v) == {:error, "Values should have at least one positive or negative value."}    
+    assert Finance.xirr(d,v) == {:error, "Values should have at least one positive or negative value."}
   end
 
   test "xirr/2 xichen27" do
@@ -38,13 +38,13 @@ defmodule FinanceTest do
   end
 
   test "xirr/2 repeated cashflow" do
-    v = [1000.0, 
-      2000.0, 
+    v = [1000.0,
+      2000.0,
       -2000.0,
       -4000.0]
-    d = [{2011,12,07}, 
-      {2011,12,07}, 
-      {2013,05,21}, 
+    d = [{2011,12,07},
+      {2011,12,07},
+      {2013,05,21},
       {2013,05,21}]
 
     assert Finance.xirr(d,v) == {:ok, 0.610359}

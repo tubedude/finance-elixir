@@ -1,5 +1,5 @@
 defmodule Finance do
-  alias Timex.Date
+  use Timex
   @moduledoc """
   Library to calculate IRR through the Bisection method.
   """
@@ -8,9 +8,9 @@ defmodule Finance do
   @type date :: Date.t
 
   defp pmap(collection, function) do
-    me = self
+    me = self()
     collection
-    |> Enum.map(fn (element) -> spawn_link fn -> (send me, {self, function.(element)}) end end)
+    |> Enum.map(fn (element) -> spawn_link fn -> (send me, {self(), function.(element)}) end end)
     |> Enum.map(fn (pid) -> receive do {^pid, result} -> result end end)
   end
 
@@ -20,8 +20,8 @@ defmodule Finance do
   @doc """
     iex> d = [{2015, 11, 1}, {2015,10,1}, {2015,6,1}]
     iex> v = [-800_000, -2_200_000, 1_000_000]
-    iex> Finance.xirr(d,v) 
-    {:ok, 21.118359}
+    iex> Finance.xirr(d,v)
+    { :ok, 21.118359 }
   """
   @spec xirr([date], [number]) :: rate
   def xirr(dates, values) when length(dates) != length(values) do
@@ -29,9 +29,9 @@ defmodule Finance do
   end
   def xirr(dates, values) do
     dates = dates
-            |> pmap(&Date.from/1)
+            |> pmap(&Date.from_erl!/1)
         min_date = Enum.min(dates)
-        {dates, values, dates_values} = compact_flow(Enum.zip(dates, values), Date.to_days(min_date)) 
+        {dates, values, dates_values} = compact_flow(Enum.zip(dates, values), min_date)
         cond do
           !verify_flow(values) ->
             {:error, "Values should have at least one positive or negative value."}
@@ -46,9 +46,8 @@ defmodule Finance do
     {Map.keys(flow), Map.values(flow), Enum.filter(flow, &(elem(&1,1) != 0))}
   end
 
-  defp organize_value(date_value, dict, min_date) do
-    {date, value} = date_value
-    Dict.update(dict, ((Date.to_days(date) - min_date) / 365.0) , value, &(value + &1))
+  defp organize_value({date, value}, map, min_date) do
+    Map.update(map, Timex.diff(date, min_date, :days) / 365.0 , value, &(value + &1))
   end
 
   defp verify_flow(values) do
@@ -69,7 +68,7 @@ defmodule Finance do
   do: abs(Float.round(rate - upper, 2)) == 0.0
 
   defp first_value_sign(dates_values) do
-    [head | _] = Dict.to_list(dates_values)
+    [head | _] = dates_values
     {_, first_value} = head
     cond do
       first_value < 0 -> 1
@@ -79,7 +78,7 @@ defmodule Finance do
   end
 
   defp reduce_date_values(dates_values, rate) do
-    list = Dict.to_list(dates_values)
+    list = dates_values
     acc = list
     |> pmap(fn (x) ->
         {
@@ -98,19 +97,23 @@ defmodule Finance do
   # defp calculate(:xirr, _           , _   , _   , _     , _     , 300), do:  {:error, "I give up"}
   defp calculate(:xirr, dates_values, _   , rate, bottom, upper , tries) do
     acc = reduce_date_values(dates_values, rate)
-    # IO.inspect "#{acc}; #{rate}; #{bottom}; #{upper}"
-    cond do
+    {rate, bottom, upper} = cond do
       acc < 0 ->
-        upper = rate
-        rate = (bottom + rate) / 2
+        # upper = rate
+        # rate = (bottom + rate) / 2
+        {(bottom + rate) / 2, bottom, rate}
       acc > 0 && reached_boundry(rate, upper) ->
-        bottom = rate
-        rate = (rate + upper) / 2
-        upper = upper + 1
+        # bottom = rate
+        # rate = (rate + upper) / 2
+        # upper = upper + 1
+        {(rate + upper) / 2, rate, upper + 1}
       acc > 0 && !reached_boundry(rate, upper) ->
-        bottom = rate
-        rate = (rate + upper) / 2
-        acc == 0.0 -> rate
+        # bottom = rate
+        # rate = (rate + upper) / 2
+        {(rate + upper) / 2,  rate, upper}
+      acc == 0.0 ->
+        # rate
+        {rate, bottom, upper}
     end
     tries = tries + 1
     calculate :xirr, dates_values, acc, rate, bottom, upper, tries
@@ -118,4 +121,3 @@ defmodule Finance do
 
 
 end # defmodule Finance
-

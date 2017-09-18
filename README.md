@@ -10,7 +10,8 @@ The package can be installed as:
   1. Add finance to your list of dependencies in `mix.exs`:
 
         def deps do
-          [{:finance, "~> 0.0.1"}]
+          [{:finance, git: "https://github.com/resuelve/finance-elixir.git",
+            tag: "1.0"}]
         end
 
   2. Ensure finance is started before your application:

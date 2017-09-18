@@ -3,14 +3,16 @@ defmodule Finance.Mixfile do
 
   def project do
     [app: :finance,
-     version: "0.0.1",
-     elixir: "~> 1.2",
+     version: "0.0.4",
+     elixir: "~> 1.3",
      build_embedded: Mix.env == :prod,
      start_permanent: Mix.env == :prod,
      description: "A library to calculate Xirr through the bisection method using parallel processes.",
      test_coverage: [tool: ExCoveralls],
      preferred_cli_env: ["coveralls": :test, "coveralls.detail": :test, "coveralls.post": :test, "coveralls.html": :test],
-     deps: deps]
+     package: package(),
+     description: description(),
+     deps: deps()]
   end
 
   def application do
@@ -25,7 +27,7 @@ defmodule Finance.Mixfile do
 
   defp package do
     [
-      files: ["lib", "priv", "mix.exs", "README*"],
+      files: ["lib", "mix.exs", "README*"],
       maintainers: ["Roberto Trevisan"],
       licenses: ["MIT"],
       links: %{"GitHub" => "https://github.com/tubedude/finance-elixir"}
@@ -34,11 +36,11 @@ defmodule Finance.Mixfile do
 
   defp deps do
     [
-      {:timex, "~> 2.1"},
-      {:earmark, "~> 0.2", only: :dev},
-      {:ex_doc, "~> 0.12", only: :dev},
-      {:excoveralls, "~> 0.5.4", only: :test},
-      {:credo, "~> 0.4"}
+      {:timex, "~> 3.1"},
+      {:earmark, "~> 1.2", only: :dev},
+      {:ex_doc, "~> 0.16", only: :dev},
+      {:excoveralls, "~> 0.7", only: :test},
+      {:credo, "~> 0.8", only: :dev}
     ]
   end
 end
