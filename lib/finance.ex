@@ -10,7 +10,11 @@ defmodule Finance do
   defp pmap(collection, function) do
     me = self()
     collection
-    |> Enum.map(fn (element) -> spawn_link fn -> (send me, {self(), function.(element)}) end end)
+    |> Enum.map(fn (element) ->
+       spawn_link fn ->
+          (send me, {self(), function.(element)})
+        end
+      end)
     |> Enum.map(fn (pid) -> receive do {^pid, result} -> result end end)
   end
 
@@ -31,23 +35,26 @@ defmodule Finance do
     dates = dates
             |> pmap(&Date.from_erl!/1)
         min_date = Enum.min(dates)
-        {dates, values, dates_values} = compact_flow(Enum.zip(dates, values), min_date)
+        {dates, values, dates_values} =
+          compact_flow(Enum.zip(dates, values), min_date)
         cond do
           !verify_flow(values) ->
             {:error, "Values should have at least one positive or negative value."}
           length(dates) - length(values) == 0 && verify_flow(values) ->
-            calculate :xirr, dates_values, [], guess_rate(dates, values), -1.0, +1.0, 0
+            boundries = {guess_rate(dates, values), -1.0, +1.0}
+            calculate :xirr, dates_values, [], boundries, 0
             true -> {:error, "Uncaught error"}
         end
   end # def xirr
 
   defp compact_flow(dates_values, min_date) do
     flow = Enum.reduce(dates_values, %{}, &organize_value(&1, &2, min_date))
-    {Map.keys(flow), Map.values(flow), Enum.filter(flow, &(elem(&1,1) != 0))}
+    {Map.keys(flow), Map.values(flow), Enum.filter(flow, &(elem(&1, 1) != 0))}
   end
 
   defp organize_value({date, value}, map, min_date) do
-    Map.update(map, Timex.diff(date, min_date, :days) / 365.0 , value, &(value + &1))
+    days = Timex.diff(date, min_date, :days) / 365.0
+    Map.update(map, days , value, &(value + &1))
   end
 
   defp verify_flow(values) do
@@ -82,8 +89,8 @@ defmodule Finance do
     acc = list
     |> pmap(fn (x) ->
         {
-          elem(x,0),
-          elem(x,1),
+          elem(x, 0),
+          elem(x, 1),
           rate
         } end)
       |> pmap(&(xirr_reduction/1))
@@ -92,12 +99,18 @@ defmodule Finance do
         acc * first_value_sign(dates_values)
   end
 
-  defp calculate(:xirr, _           , 0.0 , rate, _     , _     , _), do: {:ok, Float.round(rate,6)}
-  defp calculate(:xirr, _           , _   , -1.0, _     , _     , _), do: {:error, "Could not converge"}
-  # defp calculate(:xirr, _           , _   , _   , _     , _     , 300), do:  {:error, "I give up"}
-  defp calculate(:xirr, dates_values, _   , rate, bottom, upper , tries) do
+  defp calculate(:xirr, _date_values , 0.0 , {rate, _bottom, _upper}, _tries) do
+    {:ok, Float.round(rate, 6)}
+  end
+  defp calculate(:xirr, _date_values , _acc, {-1.0, _bottom, _upper}, _tries) do
+    {:error, "Could not converge"}
+  end
+  # defp calculate(:xirr, _date_values, _acc, {_   , _     , _ }    , 300) do
+  #   {:error, "I give up"}
+  # end
+  defp calculate(:xirr, dates_values, _acc , {rate, bottom, upper} , tries) do
     acc = reduce_date_values(dates_values, rate)
-    {rate, bottom, upper} = cond do
+    resp = cond do
       acc < 0 ->
         # upper = rate
         # rate = (bottom + rate) / 2
@@ -116,8 +129,7 @@ defmodule Finance do
         {rate, bottom, upper}
     end
     tries = tries + 1
-    calculate :xirr, dates_values, acc, rate, bottom, upper, tries
+    calculate :xirr, dates_values, acc, resp, tries
   end
-
 
 end # defmodule Finance
