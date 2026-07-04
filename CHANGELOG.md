@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- `volatility/2` and `volatility!/2` — annualised volatility of a price series,
+  the standard deviation of its period returns scaled by `√periods_per_year`.
+  Supports simple or log returns and a configurable period count. Resolves the
+  long-standing volatility request (issue #7), with the submitted snippet's
+  crashes on short input and zero prices fixed.
+
 ## 1.0.0 — 2026-07-04
 
 A complete rewrite of the library. **Breaking changes** — some return values

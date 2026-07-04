@@ -478,6 +478,40 @@ defmodule FinanceTest do
     end
   end
 
+  describe "volatility" do
+    test "annualises the standard deviation of simple returns" do
+      assert Finance.volatility([100, 102, 101, 103, 105]) == {:ok, 0.234528}
+    end
+
+    test "supports log returns and a custom period count" do
+      assert Finance.volatility([100, 102, 101, 103, 105], returns: :log) == {:ok, 0.233384}
+      assert {:ok, monthly} = Finance.volatility([100, 102, 101, 103, 105], periods_per_year: 12)
+      assert_in_delta monthly, 0.051178, 1.0e-6
+    end
+
+    test "needs at least three prices" do
+      assert Finance.volatility([100, 105]) == {:error, :insufficient_data}
+      assert Finance.volatility([100]) == {:error, :insufficient_data}
+      assert Finance.volatility([]) == {:error, :insufficient_data}
+    end
+
+    test "rejects non-positive prices" do
+      assert Finance.volatility([100, 0, 105]) == {:error, :undefined}
+      assert Finance.volatility([100, -5, 105]) == {:error, :undefined}
+    end
+
+    test "rejects unknown options" do
+      assert_raise NimbleOptions.ValidationError, fn ->
+        Finance.volatility([100, 102, 105], returns: :geometric)
+      end
+    end
+
+    test "volatility!/1 returns the bare value and raises on error" do
+      assert Finance.volatility!([100, 102, 101, 103, 105]) == 0.234528
+      assert_raise ArgumentError, fn -> Finance.volatility!([100]) end
+    end
+  end
+
   describe "properties" do
     # Build a two-flow investment with a known rate and confirm we recover it:
     # investing -P today and receiving P·(1+r)^years after `years` implies XIRR = r.
