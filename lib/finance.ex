@@ -1,4 +1,27 @@
 defmodule Finance do
+  @options_schema NimbleOptions.new!(
+                    guess: [
+                      type: :float,
+                      default: 0.1,
+                      doc: "initial rate for the Newton-Raphson solver"
+                    ],
+                    tolerance: [
+                      type: :float,
+                      default: 1.0e-9,
+                      doc: "convergence threshold on the net present value"
+                    ],
+                    max_iterations: [
+                      type: :pos_integer,
+                      default: 100,
+                      doc: "cap on solver iterations before giving up"
+                    ],
+                    precision: [
+                      type: :non_neg_integer,
+                      default: 6,
+                      doc: "decimal places the result is rounded to"
+                    ]
+                  )
+
   @moduledoc """
   Cash-flow analysis: internal rate of return, net present value, and modified IRR.
 
@@ -29,17 +52,16 @@ defmodule Finance do
   Dated flows may be `{date, amount}` pairs or two parallel lists; dates may be
   `Date` structs or Erlang-style `{year, month, day}` tuples. Amounts may be any
   number (integer minor units such as cents, or floats) or a `Decimal` when that
-  optional dependency is installed — results are always floats. `Decimal` is the
-  library's only dependency and it is optional, so by default nothing is pulled in.
+  optional dependency is installed — results are always floats. The only required
+  dependency is the tiny `nimble_options` (option validation and docs); `Decimal`
+  is optional.
 
   ## Options
 
-  The rate-finding and value functions accept a keyword list:
+  The rate-finding and value functions accept a keyword list. Invalid options
+  raise (they are a caller error), while data problems return `{:error, reason}`.
 
-    * `:guess` — initial rate for Newton-Raphson (default `0.1`)
-    * `:tolerance` — convergence threshold on the net present value (default `1.0e-9`)
-    * `:max_iterations` — cap before giving up (default `100`)
-    * `:precision` — decimal places the result is rounded to (default `6`)
+  #{NimbleOptions.docs(@options_schema)}
   """
 
   @typedoc "A `Date` struct or an Erlang-style `{year, month, day}` tuple."
@@ -68,8 +90,6 @@ defmodule Finance do
           | :did_not_converge
 
   @days_in_year 365.0
-
-  @default_options [guess: 0.1, tolerance: 1.0e-9, max_iterations: 100, precision: 6]
 
   # === XIRR — internal rate of return for dated flows ======================
 
@@ -159,6 +179,8 @@ defmodule Finance do
   @spec xnpv(rate, [cash_flow], [option]) :: {:ok, number} | {:error, error}
   def xnpv(rate, cash_flows, opts)
       when is_number(rate) and is_list(cash_flows) and is_list(opts) do
+    opts = options(opts)
+
     with {:ok, flows} <- normalize(cash_flows) do
       {:ok, round_value(present_value(flows, rate), opts)}
     end
@@ -189,10 +211,11 @@ defmodule Finance do
   @doc "Like `irr/1`, but accepts the same options as `xirr/2`."
   @spec irr([amount], [option]) :: {:ok, rate} | {:error, error}
   def irr(amounts, opts) when is_list(amounts) and is_list(opts) do
+    opts = options(opts)
     flows = periodic_flows(amounts)
 
     with :ok <- validate(flows) do
-      solve(flows, Keyword.merge(@default_options, opts))
+      solve(flows, opts)
     end
   end
 
@@ -231,6 +254,7 @@ defmodule Finance do
 
   def npv(rate, amounts, opts)
       when is_number(rate) and is_list(amounts) and is_list(opts) do
+    opts = options(opts)
     {:ok, round_value(present_value(periodic_flows(amounts), rate), opts)}
   end
 
@@ -256,6 +280,7 @@ defmodule Finance do
   def mirr(amounts, finance_rate, reinvest_rate, opts \\ [])
       when is_list(amounts) and is_number(finance_rate) and is_number(reinvest_rate) and
              is_list(opts) do
+    opts = options(opts)
     values = Enum.map(amounts, &to_amount/1)
     n = length(values)
 
@@ -308,7 +333,7 @@ defmodule Finance do
   defp zip(_dates, _values, _opts), do: {:error, :mismatched_lengths}
 
   defp compute(cash_flows, opts) do
-    opts = Keyword.merge(@default_options, opts)
+    opts = options(opts)
 
     with {:ok, flows} <- normalize(cash_flows),
          :ok <- validate(flows) do
@@ -316,10 +341,13 @@ defmodule Finance do
     end
   end
 
+  # Validate options against the schema, applying defaults. Raises
+  # `NimbleOptions.ValidationError` on an unknown key or bad value.
+  defp options(opts), do: NimbleOptions.validate!(opts, @options_schema)
+
   # `+ 0.0` collapses a floating-point negative zero to `0.0`.
   defp round_value(value, opts) do
-    precision = @default_options |> Keyword.merge(opts) |> Keyword.fetch!(:precision)
-    Float.round(value, precision) + 0.0
+    Float.round(value, Keyword.fetch!(opts, :precision)) + 0.0
   end
 
   defp unwrap!({:ok, value}), do: value

@@ -90,6 +90,24 @@ defmodule FinanceTest do
     test "options work with the two-list form via xirr/3" do
       assert Finance.xirr([{2019, 1, 1}, {2020, 1, 1}], [-1000, 1100], precision: 3) == {:ok, 0.1}
     end
+
+    test "an unknown option key raises (caller error, not a data error)" do
+      flows = [{~D[2019-01-01], -1000}, {~D[2020-01-01], 1100}]
+
+      assert_raise NimbleOptions.ValidationError, fn ->
+        Finance.xirr(flows, precison: 2)
+      end
+    end
+
+    test "an out-of-type option value raises" do
+      assert_raise NimbleOptions.ValidationError, fn ->
+        Finance.irr([-1000, 1100], max_iterations: -5)
+      end
+
+      assert_raise NimbleOptions.ValidationError, fn ->
+        Finance.npv(0.1, [-1000, 1100], precision: 1.5)
+      end
+    end
   end
 
   describe "errors" do

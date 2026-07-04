@@ -8,6 +8,9 @@
   (equally spaced) internal rate of return, net present value, and modified IRR.
 - Optional `Decimal` support: amounts may be `%Decimal{}` values when the
   (optional) `decimal` dependency is present. Results remain floats.
+- Option validation via `nimble_options`: unknown keys and out-of-type values
+  now raise `NimbleOptions.ValidationError` (a caller error) instead of being
+  silently ignored, and the option docs are generated from the schema.
 
 ### Notes
 - Periodic `npv/2` places the first amount at period 0 (so `npv(irr(a), a) ≈ 0`),

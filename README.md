@@ -4,7 +4,8 @@
 
 A small Elixir library for cash-flow analysis — internal rate of return
 (`xirr`/`irr`), net present value (`xnpv`/`npv`), and modified IRR (`mirr`). Its
-only dependency, `Decimal`, is optional, so by default it pulls in nothing.
+only required dependency is the tiny, zero-transitive-dependency `nimble_options`;
+`Decimal` support is optional.
 
 Functions come in two flavours: **dated** (`xirr`, `xnpv`) take flows at
 arbitrary dates on an Actual/365 basis, matching spreadsheet `XIRR`/`XNPV`;

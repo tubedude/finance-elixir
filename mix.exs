@@ -58,6 +58,7 @@ defmodule Finance.MixProject do
   defp deps do
     [
       {:decimal, "~> 3.0", optional: true},
+      {:nimble_options, "~> 1.1"},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
