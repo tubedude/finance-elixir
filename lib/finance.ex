@@ -1,135 +1,273 @@
 defmodule Finance do
-  use Timex
   @moduledoc """
-  Library to calculate IRR through the Bisection method.
+  Calculates the **XIRR** — the internal rate of return for a series of cash
+  flows that occur at irregular intervals.
+
+  Given cash flows `cf_i` at times `t_i` (in years from the earliest flow),
+  XIRR is the rate `r` that solves:
+
+      Σ cf_i / (1 + r)^t_i = 0
+
+  The solver uses Newton-Raphson (fast, analytic derivative) and falls back to
+  a bracketing bisection when Newton leaves the valid domain or fails to
+  converge. It follows the same conventions as spreadsheet `XIRR` functions —
+  an Actual/365 day count, a default `0.1` initial guess, and a 100-iteration
+  cap — and has no runtime dependencies.
+
+  ## Example
+
+      iex> Finance.xirr([{~D[2019-01-01], -1000}, {~D[2020-01-01], 1100}])
+      {:ok, 0.1}
+
+  Cash flows may be given as `{date, amount}` pairs (see `xirr/2`) or as two
+  parallel lists of dates and amounts. Dates may be `Date` structs or
+  Erlang-style `{year, month, day}` tuples.
+
+  ## Options
+
+  The `{date, amount}` form accepts a keyword list:
+
+    * `:guess` — initial rate for Newton-Raphson (default `0.1`)
+    * `:tolerance` — convergence threshold on the net present value (default `1.0e-9`)
+    * `:max_iterations` — cap before giving up (default `100`)
+    * `:precision` — decimal places the result is rounded to (default `6`)
   """
 
+  @typedoc "A `Date` struct or an Erlang-style `{year, month, day}` tuple."
+  @type date :: Date.t() | {integer, integer, integer}
+
+  @typedoc "A dated cash flow. Positive amounts are inflows, negative are outflows."
+  @type cash_flow :: {date, number}
+
+  @typedoc "An annual rate of return, e.g. `0.1` for 10%."
   @type rate :: float
-  @type date :: Date.t
 
-  defp pmap(collection, function) do
-    me = self()
-    collection
-    |> Enum.map(fn (element) ->
-       spawn_link fn ->
-          (send me, {self(), function.(element)})
-        end
-      end)
-    |> Enum.map(fn (pid) -> receive do {^pid, result} -> result end end)
-  end
+  @type option ::
+          {:guess, number}
+          | {:tolerance, number}
+          | {:max_iterations, pos_integer}
+          | {:precision, non_neg_integer}
 
-  defp xirr_reduction({period, value, rate}),
-  do: value / :math.pow(1 + rate, period)
+  @type error ::
+          :mismatched_lengths
+          | :insufficient_data
+          | :single_signed_flow
+          | :invalid_date
+          | :did_not_converge
+
+  @days_in_year 365.0
+
+  @default_options [guess: 0.1, tolerance: 1.0e-9, max_iterations: 100, precision: 6]
 
   @doc """
-    iex> d = [{2015, 11, 1}, {2015,10,1}, {2015,6,1}]
-    iex> v = [-800_000, -2_200_000, 1_000_000]
-    iex> Finance.xirr(d,v)
-    { :ok, 21.118359 }
+  Calculates the XIRR for a list of `{date, amount}` cash flows.
+
+  See `xirr/2` for options and the two-list form.
+
+      iex> Finance.xirr([{~D[2015-06-01], 1_000_000}, {~D[2015-10-01], -2_200_000}, {~D[2015-11-01], -800_000}])
+      {:ok, 21.118359}
   """
-  @spec xirr([date], [number]) :: rate
-  def xirr(dates, values) when length(dates) != length(values) do
-    {:error, "Date and Value collections must have the same size"}
-  end
-  def xirr(dates, values) do
-    dates = dates
-            |> pmap(&Date.from_erl!/1)
-        min_date = Enum.min(dates)
-        {dates, values, dates_values} =
-          compact_flow(Enum.zip(dates, values), min_date)
-        cond do
-          !verify_flow(values) ->
-            {:error, "Values should have at least one positive or negative value."}
-          length(dates) - length(values) == 0 && verify_flow(values) ->
-            boundries = {guess_rate(dates, values), -1.0, +1.0}
-            calculate :xirr, dates_values, [], boundries, 0
-            true -> {:error, "Uncaught error"}
-        end
-  end # def xirr
+  @spec xirr([cash_flow]) :: {:ok, rate} | {:error, error}
+  def xirr(cash_flows) when is_list(cash_flows), do: xirr(cash_flows, [])
 
-  defp compact_flow(dates_values, min_date) do
-    flow = Enum.reduce(dates_values, %{}, &organize_value(&1, &2, min_date))
-    {Map.keys(flow), Map.values(flow), Enum.filter(flow, &(elem(&1, 1) != 0))}
-  end
+  @doc """
+  Calculates the XIRR, either from `{date, amount}` pairs plus options, or from
+  two parallel lists of dates and amounts.
 
-  defp organize_value({date, value}, map, min_date) do
-    days = Timex.diff(date, min_date, :days) / 365.0
-    Map.update(map, days , value, &(value + &1))
+  Returns `{:ok, rate}` or `{:error, reason}`. Flows on the same date are
+  combined; the series must contain at least one positive and one negative
+  amount, otherwise no rate exists.
+
+      iex> Finance.xirr([{~D[2019-01-01], -1000}, {~D[2020-01-01], 1100}], guess: 0.5)
+      {:ok, 0.1}
+
+      iex> Finance.xirr([~D[2019-01-01], ~D[2020-01-01]], [-1000, 1100])
+      {:ok, 0.1}
+  """
+  @spec xirr([cash_flow], [option]) :: {:ok, rate} | {:error, error}
+  @spec xirr([date], [number]) :: {:ok, rate} | {:error, error}
+  def xirr(first, second) when is_list(first) and is_list(second) do
+    if options?(second) do
+      compute(first, second)
+    else
+      zip(first, second, [])
+    end
   end
 
-  defp verify_flow(values) do
-    Enum.any?(values, fn(x) -> x > 0 end) &&
-    Enum.any?(values, fn(x) -> x < 0 end)
+  @doc """
+  Calculates the XIRR from two parallel lists of dates and amounts, with options.
+
+      iex> Finance.xirr([~D[2019-01-01], ~D[2020-01-01]], [-1000, 1100], precision: 2)
+      {:ok, 0.1}
+  """
+  @spec xirr([date], [number], [option]) :: {:ok, rate} | {:error, error}
+  def xirr(dates, values, opts)
+      when is_list(dates) and is_list(values) and is_list(opts) do
+    zip(dates, values, opts)
   end
 
-  @spec guess_rate([date], [number]) :: rate
-  defp guess_rate(dates, values) do
-    {min_value, max_value} = Enum.min_max(values)
-    period = 1 / (length(dates) - 1)
-    multiple = 1 + abs(max_value / min_value)
-    rate = :math.pow(multiple, period) - 1
-    Float.round(rate, 3)
+  @doc "Like `xirr/1`, but returns the rate directly and raises `ArgumentError` on error."
+  @spec xirr!([cash_flow]) :: rate
+  def xirr!(cash_flows), do: cash_flows |> xirr() |> unwrap!()
+
+  @doc "Like `xirr/2`, but returns the rate directly and raises `ArgumentError` on error."
+  @spec xirr!([cash_flow] | [date], [option] | [number]) :: rate
+  def xirr!(first, second), do: first |> xirr(second) |> unwrap!()
+
+  # --- Dispatch helpers ----------------------------------------------------
+
+  # An empty list or a proper keyword list is treated as options. A list of
+  # `{date, amount}` pairs is not a keyword list (its keys are dates, not
+  # atoms), and a list of numeric amounts is not either — so the two input
+  # shapes are never confused.
+  defp options?([]), do: true
+  defp options?(list), do: Keyword.keyword?(list)
+
+  defp zip(dates, values, opts) when length(dates) == length(values) do
+    dates |> Enum.zip(values) |> compute(opts)
   end
 
-  defp reached_boundry(rate, upper),
-  do: abs(Float.round(rate - upper, 2)) == 0.0
+  defp zip(_dates, _values, _opts), do: {:error, :mismatched_lengths}
 
-  defp first_value_sign(dates_values) do
-    [head | _] = dates_values
-    {_, first_value} = head
+  defp compute(cash_flows, opts) do
+    opts = Keyword.merge(@default_options, opts)
+
+    with {:ok, flows} <- normalize(cash_flows),
+         :ok <- validate(flows) do
+      solve(flows, opts)
+    end
+  end
+
+  defp unwrap!({:ok, rate}), do: rate
+  defp unwrap!({:error, reason}), do: raise(ArgumentError, "could not compute xirr: #{reason}")
+
+  # --- Normalization -------------------------------------------------------
+
+  # Parse dates, re-express each flow's time as years since the earliest date,
+  # and merge flows that fall on the same date.
+  defp normalize([]), do: {:error, :insufficient_data}
+
+  defp normalize(cash_flows) do
+    parsed = Enum.map(cash_flows, fn {date, amount} -> {to_date(date), amount / 1} end)
+    min_date = parsed |> Enum.map(&elem(&1, 0)) |> Enum.min(Date)
+
+    flows =
+      parsed
+      |> Enum.reduce(%{}, fn {date, amount}, acc ->
+        period = Date.diff(date, min_date) / @days_in_year
+        Map.update(acc, period, amount, &(&1 + amount))
+      end)
+      |> Map.to_list()
+
+    {:ok, flows}
+  rescue
+    _ in [ArgumentError, FunctionClauseError] -> {:error, :invalid_date}
+  end
+
+  defp to_date(%Date{} = date), do: date
+  defp to_date({y, m, d}), do: Date.from_erl!({y, m, d})
+
+  defp validate(flows) do
+    amounts = Enum.map(flows, &elem(&1, 1))
+
     cond do
-      first_value < 0 -> 1
-      first_value > 0 -> -1
-      true -> 0
+      length(flows) < 2 -> {:error, :insufficient_data}
+      not signed_both_ways?(amounts) -> {:error, :single_signed_flow}
+      true -> :ok
     end
   end
 
-  defp reduce_date_values(dates_values, rate) do
-    list = dates_values
-    acc = list
-    |> pmap(fn (x) ->
-        {
-          elem(x, 0),
-          elem(x, 1),
-          rate
-        } end)
-      |> pmap(&(xirr_reduction/1))
-      |> Enum.sum
-      |> Float.round(4)
-        acc * first_value_sign(dates_values)
+  defp signed_both_ways?(amounts) do
+    Enum.any?(amounts, &(&1 > 0)) and Enum.any?(amounts, &(&1 < 0))
   end
 
-  defp calculate(:xirr, _date_values , 0.0 , {rate, _bottom, _upper}, _tries) do
-    {:ok, Float.round(rate, 6)}
-  end
-  defp calculate(:xirr, _date_values , _acc, {-1.0, _bottom, _upper}, _tries) do
-    {:error, "Could not converge"}
-  end
-  # defp calculate(:xirr, _date_values, _acc, {_   , _     , _ }    , 300) do
-  #   {:error, "I give up"}
-  # end
-  defp calculate(:xirr, dates_values, _acc , {rate, bottom, upper} , tries) do
-    acc = reduce_date_values(dates_values, rate)
-    resp = cond do
-      acc < 0 ->
-        # upper = rate
-        # rate = (bottom + rate) / 2
-        {(bottom + rate) / 2, bottom, rate}
-      acc > 0 && reached_boundry(rate, upper) ->
-        # bottom = rate
-        # rate = (rate + upper) / 2
-        # upper = upper + 1
-        {(rate + upper) / 2, rate, upper + 1}
-      acc > 0 && !reached_boundry(rate, upper) ->
-        # bottom = rate
-        # rate = (rate + upper) / 2
-        {(rate + upper) / 2,  rate, upper}
-      acc == 0.0 ->
-        # rate
-        {rate, bottom, upper}
+  # --- Solver --------------------------------------------------------------
+
+  defp solve(flows, opts) do
+    guess = Keyword.fetch!(opts, :guess)
+    tolerance = Keyword.fetch!(opts, :tolerance)
+    max_iterations = Keyword.fetch!(opts, :max_iterations)
+
+    result =
+      case newton(flows, guess, max_iterations, tolerance) do
+        {:ok, rate} -> {:ok, rate}
+        :diverged -> bisect(flows, max_iterations, tolerance)
+      end
+
+    case result do
+      {:ok, rate} -> {:ok, Float.round(rate, Keyword.fetch!(opts, :precision))}
+      :diverged -> {:error, :did_not_converge}
     end
-    tries = tries + 1
-    calculate :xirr, dates_values, acc, resp, tries
+  rescue
+    ArithmeticError -> {:error, :did_not_converge}
   end
 
-end # defmodule Finance
+  defp newton(_flows, _rate, 0, _tol), do: :diverged
+
+  defp newton(flows, rate, iterations, tol) do
+    f = npv(flows, rate)
+    derivative = dnpv(flows, rate)
+
+    cond do
+      abs(f) < tol -> {:ok, rate}
+      derivative == 0.0 -> :diverged
+      true -> newton_step(flows, rate, rate - f / derivative, iterations, tol)
+    end
+  end
+
+  defp newton_step(flows, rate, next, iterations, tol) do
+    cond do
+      # A Newton step outside the (-1, ∞) domain: halve the distance to -1.
+      next <= -1.0 -> newton(flows, (rate - 1.0) / 2.0, iterations - 1, tol)
+      abs(next - rate) < tol -> {:ok, next}
+      true -> newton(flows, next, iterations - 1, tol)
+    end
+  end
+
+  defp bisect(flows, max_iterations, tol) do
+    low = -0.999999
+
+    case bracket(flows, low, npv(flows, low), 1.0) do
+      {:ok, low, high} -> {:ok, bisection(flows, low, high, max_iterations, tol)}
+      :diverged -> :diverged
+    end
+  end
+
+  # Expand the upper bound until the NPV changes sign, giving us a bracket.
+  defp bracket(_flows, _low, _f_low, high) when high > 1.0e7, do: :diverged
+
+  defp bracket(flows, low, f_low, high) do
+    if f_low * npv(flows, high) <= 0 do
+      {:ok, low, high}
+    else
+      bracket(flows, low, f_low, high * 2 + 1)
+    end
+  end
+
+  defp bisection(_flows, low, high, 0, _tol), do: (low + high) / 2
+
+  defp bisection(flows, low, high, iterations, tol) do
+    mid = (low + high) / 2
+    f_mid = npv(flows, mid)
+
+    cond do
+      abs(f_mid) < tol or high - low < tol -> mid
+      npv(flows, low) * f_mid < 0 -> bisection(flows, low, mid, iterations - 1, tol)
+      true -> bisection(flows, mid, high, iterations - 1, tol)
+    end
+  end
+
+  # Net present value: Σ amount / (1 + rate)^t
+  defp npv(flows, rate) do
+    Enum.reduce(flows, 0.0, fn {t, amount}, acc ->
+      acc + amount / :math.pow(1 + rate, t)
+    end)
+  end
+
+  # Derivative of the NPV with respect to rate: Σ -t · amount / (1 + rate)^(t+1)
+  defp dnpv(flows, rate) do
+    Enum.reduce(flows, 0.0, fn {t, amount}, acc ->
+      acc + -t * amount / :math.pow(1 + rate, t + 1)
+    end)
+  end
+end
