@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.2.0 — 2026-07-04
+
+Reorganised the flat `Finance` module into domain modules. **No behaviour
+change** — every function keeps its signature and result.
+
+### Added
+- Domain modules: `Finance.CashFlow` (npv/xnpv/irr/xirr/mirr), `Finance.TVM`
+  (pv/fv/pmt/nper/rate), `Finance.Depreciation` (sln/syd/ddb/db), and
+  `Finance.Returns` (volatility).
+- `Finance.Solver` behaviour with the default `Finance.Solver.Newton`. The
+  solver is swappable per call with the `:solver` option or globally with
+  `config :finance, solver: MySolver` — a seam for a future Nx/GPU solver.
+
+### Deprecated
+- The flat `Finance.foo` functions (e.g. `Finance.xirr/1`) now delegate to their
+  domain module and are deprecated. They still work in the 1.x line and will be
+  removed in 2.0.
+
 ## 1.1.0 — 2026-07-04
 
 ### Added

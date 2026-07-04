@@ -8,11 +8,24 @@ along with the usual time-value-of-money and depreciation helpers. Options are
 validated with `nimble_options`, and amounts may be `Decimal` values when you
 have that optional dependency installed.
 
-The rate and value functions come in two forms. The **dated** ones (`xirr`,
-`xnpv`) work with flows that land on arbitrary dates, discounting on an
-Actual/365 basis to match spreadsheet `XIRR`/`XNPV`. The **periodic** ones
+The functions are organised into domain modules:
+
+- `Finance.CashFlow` — net present value and internal rate of return
+  (`npv`, `xnpv`, `irr`, `xirr`, `mirr`).
+- `Finance.TVM` — time-value-of-money scalars (`pv`, `fv`, `pmt`, `nper`, `rate`).
+- `Finance.Depreciation` — `sln`, `syd`, `ddb`, `db`.
+- `Finance.Returns` — performance and risk metrics (`volatility`).
+- `Finance.Solver` — the root-finding strategy behind the rate functions,
+  swappable via the `:solver` option or `config :finance, solver: MySolver`.
+
+The `Finance.CashFlow` rate and value functions come in two forms. The **dated**
+ones (`xirr`, `xnpv`) work with flows that land on arbitrary dates, discounting
+on an Actual/365 basis to match spreadsheet `XIRR`/`XNPV`. The **periodic** ones
 (`irr`, `npv`, `mirr`) take a plain list of amounts spread over equally spaced
 periods, for when the exact dates don't matter.
+
+> The flat `Finance.foo` functions (e.g. `Finance.xirr/1`) still work but are
+> **deprecated** — call the domain module instead. They will be removed in 2.0.
 
 ## Installation
 
@@ -34,7 +47,7 @@ going out is negative, and the series needs at least one of each — without flo
 in both directions there is no rate to solve for.
 
 ```elixir
-Finance.xirr([
+Finance.CashFlow.xirr([
   {~D[2015-06-01],  1_000_000},
   {~D[2015-10-01], -2_200_000},
   {~D[2015-11-01],   -800_000}
@@ -46,7 +59,7 @@ Dates can also be `{year, month, day}` tuples, and if it reads better you can
 supply two parallel lists instead of pairs:
 
 ```elixir
-Finance.xirr([{2019, 1, 1}, {2020, 1, 1}], [-1000, 1100])
+Finance.CashFlow.xirr([{2019, 1, 1}, {2020, 1, 1}], [-1000, 1100])
 #=> {:ok, 0.1}
 ```
 
@@ -58,9 +71,9 @@ If you would rather work with the rate directly than unwrap an `:ok` tuple,
 For flows at equally spaced periods `0, 1, 2, …`, pass a plain list of amounts:
 
 ```elixir
-Finance.irr([-1000, 500, 500, 300])                                  #=> {:ok, 0.156579}
-Finance.npv(0.1, [-1000, 600, 600])                                  #=> {:ok, 41.322314}
-Finance.mirr([-120_000, 39_000, 30_000, 21_000, 37_000, 46_000], 0.10, 0.12)
+Finance.CashFlow.irr([-1000, 500, 500, 300])                                  #=> {:ok, 0.156579}
+Finance.CashFlow.npv(0.1, [-1000, 600, 600])                                  #=> {:ok, 41.322314}
+Finance.CashFlow.mirr([-120_000, 39_000, 30_000, 21_000, 37_000, 46_000], 0.10, 0.12)
 #=> {:ok, 0.126094}
 ```
 
@@ -75,7 +88,7 @@ app already depends on [`Decimal`](https://hex.pm/packages/decimal), you can pas
 `Decimal` values straight through, with no conversion on your side:
 
 ```elixir
-Finance.xirr([{~D[2019-01-01], Decimal.new("-1000")}, {~D[2020-01-01], Decimal.new("1100")}])
+Finance.CashFlow.xirr([{~D[2019-01-01], Decimal.new("-1000")}, {~D[2020-01-01], Decimal.new("1100")}])
 #=> {:ok, 0.1}
 ```
 
