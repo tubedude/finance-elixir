@@ -12,6 +12,11 @@
   returns `Decimal` rows when given `Decimal` inputs, floats otherwise.
 - `Finance.Rates` — `effective_annual_rate/2`, `nominal_rate/2`, and
   `continuous_to_periodic/2` for converting between rate quotations.
+- `Finance.Bonds` — fixed income: `price/5`, `ytm/5` (reuses the `Finance.Solver`
+  seam, mirroring `TVM.rate`), `duration/4` (Macaulay), `modified_duration/4`,
+  and `convexity/4`, each with a `!` variant. Maturity is given in years with a
+  configurable coupon frequency (`freq`, default `2`); settlement is assumed to
+  fall on a coupon date (clean price, no accrued interest).
 
 ## 1.2.0 — 2026-07-04
 
