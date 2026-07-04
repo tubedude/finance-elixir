@@ -1,79 +1,103 @@
+defmodule StubSolver do
+  @moduledoc false
+  @behaviour Finance.Solver
+  @impl true
+  def solve(_flows, _opts), do: {:ok, 0.42}
+end
+
 defmodule FinanceTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
-  doctest Finance
+  doctest Finance.CashFlow
+  doctest Finance.TVM
+  doctest Finance.Depreciation
+  doctest Finance.Returns
+
+  describe "module organization" do
+    test "the solver is swappable via the :solver option" do
+      assert Finance.CashFlow.irr([-1000, 1100], solver: StubSolver) == {:ok, 0.42}
+      assert Finance.TVM.rate(10, -100, 1000, 0.0, 0, solver: StubSolver) == {:ok, 0.42}
+    end
+
+    test "the shared options docs are generated from the schema" do
+      docs = Finance.Shared.options_docs()
+      assert is_binary(docs)
+      assert docs =~ ":guess"
+    end
+  end
 
   describe "xirr/2 regression cases" do
     test "very good investment" do
       d = [{2015, 11, 1}, {2015, 10, 1}, {2015, 6, 1}]
       v = [-800_000, -2_200_000, 1_000_000]
-      assert Finance.xirr(d, v) == {:ok, 21.118359}
+      assert Finance.CashFlow.xirr(d, v) == {:ok, 21.118359}
     end
 
     test "bad investment" do
       d = [{1985, 1, 1}, {1990, 1, 1}, {1995, 1, 1}]
       v = [1000, -600, -200]
-      assert Finance.xirr(d, v) == {:ok, -0.034592}
+      assert Finance.CashFlow.xirr(d, v) == {:ok, -0.034592}
     end
 
     test "marano" do
       d = [{2014, 11, 7}, {2015, 5, 6}]
       v = [900, -13.5]
-      assert Finance.xirr(d, v) == {:ok, -0.9998}
+      assert Finance.CashFlow.xirr(d, v) == {:ok, -0.9998}
     end
 
     test "xichen27" do
       d = [{2014, 4, 15}, {2014, 5, 15}, {2014, 10, 19}]
       v = [-10_000.0, 305.6, 500.0]
-      assert Finance.xirr(d, v) == {:ok, -0.996815}
+      assert Finance.CashFlow.xirr(d, v) == {:ok, -0.996815}
     end
 
     test "repeated cashflow on the same date is combined" do
       v = [1000.0, 2000.0, -2000.0, -4000.0]
       d = [{2011, 12, 7}, {2011, 12, 7}, {2013, 5, 21}, {2013, 5, 21}]
-      assert Finance.xirr(d, v) == {:ok, 0.610359}
+      assert Finance.CashFlow.xirr(d, v) == {:ok, 0.610359}
     end
 
     test "ok investment" do
       v = [1000.0, -600.0, -6000.0]
       d = [{1985, 1, 1}, {1990, 1, 1}, {1995, 1, 1}]
-      assert Finance.xirr(d, v) == {:ok, 0.225683}
+      assert Finance.CashFlow.xirr(d, v) == {:ok, 0.225683}
     end
 
     test "sign of the whole series does not matter" do
       d = [{1985, 1, 1}, {1990, 1, 1}, {1995, 1, 1}]
 
-      assert Finance.xirr(d, [1000.0, -600.0, -6000.0]) ==
-               Finance.xirr(d, [-1000.0, 600.0, 6000.0])
+      assert Finance.CashFlow.xirr(d, [1000.0, -600.0, -6000.0]) ==
+               Finance.CashFlow.xirr(d, [-1000.0, 600.0, 6000.0])
     end
   end
 
   describe "input shapes" do
     test "accepts {date, amount} pairs" do
-      assert Finance.xirr([{~D[2019-01-01], -1000}, {~D[2020-01-01], 1100}]) == {:ok, 0.1}
+      assert Finance.CashFlow.xirr([{~D[2019-01-01], -1000}, {~D[2020-01-01], 1100}]) ==
+               {:ok, 0.1}
     end
 
     test "accepts Date structs and {y, m, d} tuples interchangeably" do
-      pairs = Finance.xirr([{~D[2019-01-01], -1000}, {~D[2020-01-01], 1100}])
-      tuples = Finance.xirr([{2019, 1, 1}, {2020, 1, 1}], [-1000, 1100])
+      pairs = Finance.CashFlow.xirr([{~D[2019-01-01], -1000}, {~D[2020-01-01], 1100}])
+      tuples = Finance.CashFlow.xirr([{2019, 1, 1}, {2020, 1, 1}], [-1000, 1100])
       assert pairs == tuples
     end
 
     test "xirr!/2 returns the bare rate" do
-      assert Finance.xirr!([{2019, 1, 1}, {2020, 1, 1}], [-1000, 1100]) == 0.1
+      assert Finance.CashFlow.xirr!([{2019, 1, 1}, {2020, 1, 1}], [-1000, 1100]) == 0.1
     end
 
     test "xirr!/1 raises on error" do
-      assert_raise ArgumentError, fn -> Finance.xirr!([{~D[2020-01-01], 100}]) end
+      assert_raise ArgumentError, fn -> Finance.CashFlow.xirr!([{~D[2020-01-01], 100}]) end
     end
   end
 
   describe "options" do
     test ":precision controls rounding of the result" do
       flows = [{~D[2019-01-01], -1000}, {~D[2020-01-01], 1100}]
-      assert Finance.xirr(flows, precision: 2) == {:ok, 0.1}
-      assert {:ok, rate} = Finance.xirr(flows, precision: 10)
+      assert Finance.CashFlow.xirr(flows, precision: 2) == {:ok, 0.1}
+      assert {:ok, rate} = Finance.CashFlow.xirr(flows, precision: 10)
       assert_in_delta rate, 0.1, 1.0e-6
     end
 
@@ -84,47 +108,48 @@ defmodule FinanceTest do
         {~D[2015-11-01], -800_000}
       ]
 
-      assert Finance.xirr(flows, guess: 5.0) == Finance.xirr(flows)
+      assert Finance.CashFlow.xirr(flows, guess: 5.0) == Finance.CashFlow.xirr(flows)
     end
 
     test "options work with the two-list form via xirr/3" do
-      assert Finance.xirr([{2019, 1, 1}, {2020, 1, 1}], [-1000, 1100], precision: 3) == {:ok, 0.1}
+      assert Finance.CashFlow.xirr([{2019, 1, 1}, {2020, 1, 1}], [-1000, 1100], precision: 3) ==
+               {:ok, 0.1}
     end
 
     test "an unknown option key raises (caller error, not a data error)" do
       flows = [{~D[2019-01-01], -1000}, {~D[2020-01-01], 1100}]
 
       assert_raise NimbleOptions.ValidationError, fn ->
-        Finance.xirr(flows, precison: 2)
+        Finance.CashFlow.xirr(flows, precison: 2)
       end
     end
 
     test "an out-of-type option value raises" do
       assert_raise NimbleOptions.ValidationError, fn ->
-        Finance.irr([-1000, 1100], max_iterations: -5)
+        Finance.CashFlow.irr([-1000, 1100], max_iterations: -5)
       end
 
       assert_raise NimbleOptions.ValidationError, fn ->
-        Finance.npv(0.1, [-1000, 1100], precision: 1.5)
+        Finance.CashFlow.npv(0.1, [-1000, 1100], precision: 1.5)
       end
     end
   end
 
   describe "errors" do
     test "mismatched list lengths" do
-      assert Finance.xirr([{2014, 4, 15}, {2014, 10, 19}], [-10_000.0, 305.6, 500.0]) ==
+      assert Finance.CashFlow.xirr([{2014, 4, 15}, {2014, 10, 19}], [-10_000.0, 305.6, 500.0]) ==
                {:error, :mismatched_lengths}
     end
 
     test "all amounts the same sign" do
-      assert Finance.xirr([{2014, 4, 15}, {2014, 10, 19}], [305.6, 500.0]) ==
+      assert Finance.CashFlow.xirr([{2014, 4, 15}, {2014, 10, 19}], [305.6, 500.0]) ==
                {:error, :single_signed_flow}
     end
 
     test "positive and negative flow on the same day cancel out" do
       d = [{2014, 4, 15}, {2014, 4, 15}, {2014, 10, 19}]
       v = [-10_000.0, 10_000.0, 500.0]
-      assert Finance.xirr(d, v) == {:error, :single_signed_flow}
+      assert Finance.CashFlow.xirr(d, v) == {:error, :single_signed_flow}
     end
 
     test "a series that cannot converge" do
@@ -202,28 +227,28 @@ defmodule FinanceTest do
         {2013, 5, 21}
       ]
 
-      assert Finance.xirr(d, v) == {:error, :did_not_converge}
+      assert Finance.CashFlow.xirr(d, v) == {:error, :did_not_converge}
     end
 
     test "empty input" do
-      assert Finance.xirr([]) == {:error, :insufficient_data}
+      assert Finance.CashFlow.xirr([]) == {:error, :insufficient_data}
     end
 
     test "an invalid date is reported" do
       flows = [{{2019, 13, 1}, -100}, {{2019, 1, 1}, 100}]
-      assert Finance.xirr(flows) == {:error, :invalid_date}
+      assert Finance.CashFlow.xirr(flows) == {:error, :invalid_date}
     end
   end
 
   describe "solver bisection fallback" do
     # `max_iterations: 1` starves Newton so it bails to the bisection fallback.
     test "returns a value when a root is bracketed" do
-      assert {:ok, _rate} = Finance.irr([-1000, 500, 500, 300], max_iterations: 1)
+      assert {:ok, _rate} = Finance.CashFlow.irr([-1000, 500, 500, 300], max_iterations: 1)
     end
 
     test "diverges when no root can be bracketed" do
       # An all-positive series has no rate; bisection expands its bracket, then gives up.
-      assert Finance.rate(10, 100, 1000, 0.0, 0, max_iterations: 1) ==
+      assert Finance.TVM.rate(10, 100, 1000, 0.0, 0, max_iterations: 1) ==
                {:error, :did_not_converge}
     end
   end
@@ -231,95 +256,95 @@ defmodule FinanceTest do
   describe "xnpv/2" do
     test "discounts a single future flow" do
       flows = [{~D[2019-01-01], -1000}, {~D[2020-01-01], 1000}]
-      assert Finance.xnpv(0.1, flows) == {:ok, -90.909091}
+      assert Finance.CashFlow.xnpv(0.1, flows) == {:ok, -90.909091}
     end
 
     test "does not require a sign change" do
       flows = [{~D[2019-01-01], 500}, {~D[2020-01-01], 500}]
-      assert {:ok, value} = Finance.xnpv(0.1, flows)
+      assert {:ok, value} = Finance.CashFlow.xnpv(0.1, flows)
       assert_in_delta value, 500 + 500 / 1.1, 1.0e-6
     end
 
     test ":precision controls rounding" do
       flows = [{~D[2019-01-01], -1000}, {~D[2020-01-01], 1000}]
-      assert {:ok, value} = Finance.xnpv(0.1, flows, precision: 2)
+      assert {:ok, value} = Finance.CashFlow.xnpv(0.1, flows, precision: 2)
       assert value == -90.91
     end
 
     test "combines flows on the same date" do
       flows = [{~D[2019-01-01], -1000}, {~D[2019-01-01], 400}, {~D[2020-01-01], 1000}]
-      assert Finance.xnpv(0.1, flows) == {:ok, 309.090909}
+      assert Finance.CashFlow.xnpv(0.1, flows) == {:ok, 309.090909}
     end
 
     test "propagates normalization errors" do
-      assert Finance.xnpv(0.1, []) == {:error, :insufficient_data}
+      assert Finance.CashFlow.xnpv(0.1, []) == {:error, :insufficient_data}
     end
 
     test "xnpv!/2 returns the bare value and raises on error" do
-      assert Finance.xnpv!(0.1, [{~D[2019-01-01], -1000}, {~D[2020-01-01], 1100}]) == 0.0
-      assert_raise ArgumentError, fn -> Finance.xnpv!(0.1, []) end
+      assert Finance.CashFlow.xnpv!(0.1, [{~D[2019-01-01], -1000}, {~D[2020-01-01], 1100}]) == 0.0
+      assert_raise ArgumentError, fn -> Finance.CashFlow.xnpv!(0.1, []) end
     end
   end
 
   describe "irr/1 (periodic)" do
     test "simple two-flow investment" do
-      assert Finance.irr([-1000, 1100]) == {:ok, 0.1}
+      assert Finance.CashFlow.irr([-1000, 1100]) == {:ok, 0.1}
     end
 
     test "matches xirr on equally spaced annual dates" do
       # Non-leap consecutive years give exactly one-year periods.
       dates = [~D[2001-01-01], ~D[2002-01-01], ~D[2003-01-01], ~D[2004-01-01]]
       amounts = [-1000, 500, 500, 300]
-      assert Finance.irr(amounts) == Finance.xirr(dates, amounts)
+      assert Finance.CashFlow.irr(amounts) == Finance.CashFlow.xirr(dates, amounts)
     end
 
     test "requires at least one positive and one negative amount" do
-      assert Finance.irr([100, 200, 300]) == {:error, :single_signed_flow}
-      assert Finance.irr([-500]) == {:error, :insufficient_data}
+      assert Finance.CashFlow.irr([100, 200, 300]) == {:error, :single_signed_flow}
+      assert Finance.CashFlow.irr([-500]) == {:error, :insufficient_data}
     end
 
     test "irr!/1 returns the bare rate and raises on error" do
-      assert Finance.irr!([-1000, 1100]) == 0.1
-      assert_raise ArgumentError, fn -> Finance.irr!([1, 2, 3]) end
+      assert Finance.CashFlow.irr!([-1000, 1100]) == 0.1
+      assert_raise ArgumentError, fn -> Finance.CashFlow.irr!([1, 2, 3]) end
     end
   end
 
   describe "npv/2 (periodic)" do
     test "first amount sits at period 0 (undiscounted)" do
       # -1000 + 600/1.1 + 600/1.1^2
-      assert Finance.npv(0.1, [-1000, 600, 600]) == {:ok, 41.322314}
+      assert Finance.CashFlow.npv(0.1, [-1000, 600, 600]) == {:ok, 41.322314}
     end
 
     test "npv at the irr rate is ~zero" do
       amounts = [-1000, 500, 500, 300]
-      assert {:ok, rate} = Finance.irr(amounts)
-      assert {:ok, value} = Finance.npv(rate, amounts)
+      assert {:ok, rate} = Finance.CashFlow.irr(amounts)
+      assert {:ok, value} = Finance.CashFlow.npv(rate, amounts)
       assert_in_delta value, 0.0, 1.0e-3
     end
 
     test "empty series is an error" do
-      assert Finance.npv(0.1, []) == {:error, :insufficient_data}
+      assert Finance.CashFlow.npv(0.1, []) == {:error, :insufficient_data}
     end
 
     test "npv!/2 returns the bare value" do
-      assert Finance.npv!(0.1, [-1000, 1100]) == 0.0
+      assert Finance.CashFlow.npv!(0.1, [-1000, 1100]) == 0.0
     end
   end
 
   describe "mirr/3" do
     test "Microsoft's documented example" do
       values = [-120_000, 39_000, 30_000, 21_000, 37_000, 46_000]
-      assert Finance.mirr(values, 0.10, 0.12) == {:ok, 0.126094}
+      assert Finance.CashFlow.mirr(values, 0.10, 0.12) == {:ok, 0.126094}
     end
 
     test "requires both an inflow and an outflow" do
-      assert Finance.mirr([100, 200], 0.1, 0.1) == {:error, :single_signed_flow}
-      assert Finance.mirr([-100], 0.1, 0.1) == {:error, :insufficient_data}
+      assert Finance.CashFlow.mirr([100, 200], 0.1, 0.1) == {:error, :single_signed_flow}
+      assert Finance.CashFlow.mirr([-100], 0.1, 0.1) == {:error, :insufficient_data}
     end
 
     test "mirr!/3 returns the bare rate" do
       values = [-120_000, 39_000, 30_000, 21_000, 37_000, 46_000]
-      assert Finance.mirr!(values, 0.10, 0.12) == 0.126094
+      assert Finance.CashFlow.mirr!(values, 0.10, 0.12) == 0.126094
     end
   end
 
@@ -327,188 +352,201 @@ defmodule FinanceTest do
     test "xirr accepts Decimal amounts, matching float results" do
       decimals = [{~D[2019-01-01], Decimal.new("-1000")}, {~D[2020-01-01], Decimal.new("1100")}]
       floats = [{~D[2019-01-01], -1000.0}, {~D[2020-01-01], 1100.0}]
-      assert Finance.xirr(decimals) == Finance.xirr(floats)
-      assert Finance.xirr(decimals) == {:ok, 0.1}
+      assert Finance.CashFlow.xirr(decimals) == Finance.CashFlow.xirr(floats)
+      assert Finance.CashFlow.xirr(decimals) == {:ok, 0.1}
     end
 
     test "periodic functions accept Decimal amounts" do
-      assert Finance.irr([Decimal.new("-1000"), Decimal.new("1100")]) == {:ok, 0.1}
+      assert Finance.CashFlow.irr([Decimal.new("-1000"), Decimal.new("1100")]) == {:ok, 0.1}
 
-      assert Finance.mirr([Decimal.new("-100"), Decimal.new("50"), Decimal.new("80")], 0.1, 0.1) ==
-               Finance.mirr([-100, 50, 80], 0.1, 0.1)
+      assert Finance.CashFlow.mirr(
+               [Decimal.new("-100"), Decimal.new("50"), Decimal.new("80")],
+               0.1,
+               0.1
+             ) ==
+               Finance.CashFlow.mirr([-100, 50, 80], 0.1, 0.1)
     end
   end
 
   describe "TVM scalars" do
     test "fv, pv, pmt, nper are mutually consistent" do
       # A payment that pays off pv over nper periods should give fv ~ 0.
-      assert {:ok, payment} = Finance.pmt(0.10, 10, 1000)
+      assert {:ok, payment} = Finance.TVM.pmt(0.10, 10, 1000)
       assert_in_delta payment, -162.745395, 1.0e-6
-      assert {:ok, future} = Finance.fv(0.10, 10, payment, 1000)
+      assert {:ok, future} = Finance.TVM.fv(0.10, 10, payment, 1000)
       assert_in_delta future, 0.0, 1.0e-4
     end
 
     test "pv inverts fv" do
-      assert {:ok, future} = Finance.fv(0.08, 5, 0, -1000)
-      assert {:ok, present} = Finance.pv(0.08, 5, 0, future)
+      assert {:ok, future} = Finance.TVM.fv(0.08, 5, 0, -1000)
+      assert {:ok, present} = Finance.TVM.pv(0.08, 5, 0, future)
       assert_in_delta present, -1000.0, 1.0e-6
     end
 
     test "nper inverts pmt" do
-      assert {:ok, payment} = Finance.pmt(0.05, 12, 1000)
-      assert {:ok, periods} = Finance.nper(0.05, payment, 1000)
+      assert {:ok, payment} = Finance.TVM.pmt(0.05, 12, 1000)
+      assert {:ok, periods} = Finance.TVM.nper(0.05, payment, 1000)
       assert_in_delta periods, 12.0, 1.0e-6
     end
 
     test "rate inverts pmt (reuses the irr solver)" do
-      assert {:ok, payment} = Finance.pmt(0.03, 24, 5000)
-      assert Finance.rate(24, payment, 5000) == {:ok, 0.03}
+      assert {:ok, payment} = Finance.TVM.pmt(0.03, 24, 5000)
+      assert Finance.TVM.rate(24, payment, 5000) == {:ok, 0.03}
     end
 
     test "zero-rate branches" do
-      assert Finance.fv(0.0, 10, -100, 0) == {:ok, 1000.0}
-      assert Finance.pv(0.0, 10, -100, 0) == {:ok, 1000.0}
-      assert Finance.pmt(0.0, 10, 1000) == {:ok, -100.0}
-      assert Finance.nper(0.0, -100, 1000) == {:ok, 10.0}
+      assert Finance.TVM.fv(0.0, 10, -100, 0) == {:ok, 1000.0}
+      assert Finance.TVM.pv(0.0, 10, -100, 0) == {:ok, 1000.0}
+      assert Finance.TVM.pmt(0.0, 10, 1000) == {:ok, -100.0}
+      assert Finance.TVM.nper(0.0, -100, 1000) == {:ok, 10.0}
     end
 
     test "type: 1 (annuity due) differs from ordinary" do
-      assert {:ok, ordinary} = Finance.fv(0.05, 10, -100, 0, 0)
-      assert {:ok, due} = Finance.fv(0.05, 10, -100, 0, 1)
+      assert {:ok, ordinary} = Finance.TVM.fv(0.05, 10, -100, 0, 0)
+      assert {:ok, due} = Finance.TVM.fv(0.05, 10, -100, 0, 1)
       # Paying at the start of each period earns one extra period of interest.
       assert_in_delta due, ordinary * 1.05, 1.0e-6
     end
 
     test "undefined and non-convergent cases" do
-      assert Finance.pmt(0.05, 0, 1000) == {:error, :undefined}
-      assert Finance.nper(0.0, 0, 1000) == {:error, :undefined}
-      assert Finance.rate(10.5, -100, 1000) == {:error, :undefined}
+      assert Finance.TVM.pmt(0.05, 0, 1000) == {:error, :undefined}
+      assert Finance.TVM.nper(0.0, 0, 1000) == {:error, :undefined}
+      assert Finance.TVM.rate(10.5, -100, 1000) == {:error, :undefined}
     end
 
     test "bang variants return bare values and raise" do
-      assert Finance.fv!(0.0, 10, -100, 0) == 1000.0
-      assert Finance.pv!(0.0, 10, -100, 0) == 1000.0
-      assert Finance.pmt!(0.0, 10, 1000) == -100.0
-      assert Finance.nper!(0.0, -100, 1000) == 10.0
-      assert Finance.rate!(10, -100, 1000) == 0.0
-      assert_raise ArgumentError, fn -> Finance.pmt!(0.05, 0, 1000) end
-      assert_raise ArgumentError, fn -> Finance.rate!(10, 100, 1000) end
+      assert Finance.TVM.fv!(0.0, 10, -100, 0) == 1000.0
+      assert Finance.TVM.pv!(0.0, 10, -100, 0) == 1000.0
+      assert Finance.TVM.pmt!(0.0, 10, 1000) == -100.0
+      assert Finance.TVM.nper!(0.0, -100, 1000) == 10.0
+      assert Finance.TVM.rate!(10, -100, 1000) == 0.0
+      assert_raise ArgumentError, fn -> Finance.TVM.pmt!(0.05, 0, 1000) end
+      assert_raise ArgumentError, fn -> Finance.TVM.rate!(10, 100, 1000) end
     end
 
     test "rate with a single-signed series cannot converge" do
-      assert Finance.rate(10, 100, 1000) == {:error, :did_not_converge}
+      assert Finance.TVM.rate(10, 100, 1000) == {:error, :did_not_converge}
     end
 
     test "nper is undefined when 1 + rate <= 0" do
-      assert Finance.nper(-1.5, -100, 1000) == {:error, :undefined}
+      assert Finance.TVM.nper(-1.5, -100, 1000) == {:error, :undefined}
     end
 
     test "nper is undefined when the payment exactly services the balance" do
       # pmt/rate cancels pv, so the log argument's denominator is zero.
-      assert Finance.nper(0.05, -50, 1000) == {:error, :undefined}
+      assert Finance.TVM.nper(0.05, -50, 1000) == {:error, :undefined}
     end
 
     test "rate handles annuity-due (type: 1)" do
-      assert {:ok, _rate} = Finance.rate(10, -100, 1000, 0.0, 1)
+      assert {:ok, _rate} = Finance.TVM.rate(10, -100, 1000, 0.0, 1)
     end
 
     test "invalid options still raise through rate/6" do
       assert_raise NimbleOptions.ValidationError, fn ->
-        Finance.rate(10, -100, 1000, 0.0, 0, precision: -1)
+        Finance.TVM.rate(10, -100, 1000, 0.0, 0, precision: -1)
       end
     end
   end
 
   describe "depreciation" do
     test "straight-line spreads the loss evenly" do
-      assert Finance.sln(10_000, 1_000, 5) == {:ok, 1800.0}
-      assert Finance.sln(10_000, 1_000, 0) == {:error, :undefined}
-      assert Finance.sln!(10_000, 1_000, 5) == 1800.0
+      assert Finance.Depreciation.sln(10_000, 1_000, 5) == {:ok, 1800.0}
+      assert Finance.Depreciation.sln(10_000, 1_000, 0) == {:error, :undefined}
+      assert Finance.Depreciation.sln!(10_000, 1_000, 5) == 1800.0
     end
 
     test "sum-of-years'-digits accelerates then tapers" do
-      assert Finance.syd(10_000, 1_000, 5, 1) == {:ok, 3000.0}
-      assert Finance.syd(10_000, 1_000, 5, 5) == {:ok, 600.0}
+      assert Finance.Depreciation.syd(10_000, 1_000, 5, 1) == {:ok, 3000.0}
+      assert Finance.Depreciation.syd(10_000, 1_000, 5, 5) == {:ok, 600.0}
       # The four remaining years plus the first sum to the depreciable base.
-      total = for(p <- 1..5, do: elem(Finance.syd(10_000, 1_000, 5, p), 1)) |> Enum.sum()
+      total =
+        for(p <- 1..5, do: elem(Finance.Depreciation.syd(10_000, 1_000, 5, p), 1)) |> Enum.sum()
+
       assert_in_delta total, 9000.0, 1.0e-9
     end
 
     test "syd rejects out-of-range and non-positive life" do
-      assert Finance.syd(10_000, 1_000, 5, 6) == {:error, :undefined}
-      assert Finance.syd(10_000, 1_000, 5, 0) == {:error, :undefined}
-      assert Finance.syd(10_000, 1_000, 0, 1) == {:error, :undefined}
-      assert_raise ArgumentError, fn -> Finance.syd!(10_000, 1_000, 5, 6) end
+      assert Finance.Depreciation.syd(10_000, 1_000, 5, 6) == {:error, :undefined}
+      assert Finance.Depreciation.syd(10_000, 1_000, 5, 0) == {:error, :undefined}
+      assert Finance.Depreciation.syd(10_000, 1_000, 0, 1) == {:error, :undefined}
+      assert_raise ArgumentError, fn -> Finance.Depreciation.syd!(10_000, 1_000, 5, 6) end
     end
 
     test "double-declining balance never drops below salvage and sums to the base" do
-      assert Finance.ddb(10_000, 1_000, 5, 1) == {:ok, 4000.0}
-      assert Finance.ddb(10_000, 1_000, 5, 5) == {:ok, 296.0}
-      total = for(p <- 1..5, do: elem(Finance.ddb(10_000, 1_000, 5, p), 1)) |> Enum.sum()
+      assert Finance.Depreciation.ddb(10_000, 1_000, 5, 1) == {:ok, 4000.0}
+      assert Finance.Depreciation.ddb(10_000, 1_000, 5, 5) == {:ok, 296.0}
+
+      total =
+        for(p <- 1..5, do: elem(Finance.Depreciation.ddb(10_000, 1_000, 5, p), 1)) |> Enum.sum()
+
       assert_in_delta total, 9000.0, 1.0e-9
     end
 
     test "ddb honours a custom factor and rejects invalid input" do
-      assert {:ok, value} = Finance.ddb(10_000, 1_000, 5, 1, 3)
+      assert {:ok, value} = Finance.Depreciation.ddb(10_000, 1_000, 5, 1, 3)
       assert value == 6000.0
-      assert Finance.ddb(10_000, 1_000, 0, 1) == {:error, :undefined}
-      assert Finance.ddb(10_000, 1_000, 5, 2.5) == {:error, :undefined}
-      assert Finance.ddb(10_000, 1_000, 5, 6) == {:error, :undefined}
-      assert Finance.ddb!(10_000, 1_000, 5, 1) == 4000.0
+      assert Finance.Depreciation.ddb(10_000, 1_000, 0, 1) == {:error, :undefined}
+      assert Finance.Depreciation.ddb(10_000, 1_000, 5, 2.5) == {:error, :undefined}
+      assert Finance.Depreciation.ddb(10_000, 1_000, 5, 6) == {:error, :undefined}
+      assert Finance.Depreciation.ddb!(10_000, 1_000, 5, 1) == 4000.0
     end
 
     test "fixed-declining balance with a full first year" do
-      assert Finance.db(10_000, 1_000, 5, 1) == {:ok, 3690.0}
-      assert Finance.db(10_000, 1_000, 5, 2) == {:ok, 2328.39}
-      assert Finance.db!(10_000, 1_000, 5, 1) == 3690.0
+      assert Finance.Depreciation.db(10_000, 1_000, 5, 1) == {:ok, 3690.0}
+      assert Finance.Depreciation.db(10_000, 1_000, 5, 2) == {:ok, 2328.39}
+      assert Finance.Depreciation.db!(10_000, 1_000, 5, 1) == 3690.0
     end
 
     test "db with a short first year has a partial final period" do
-      assert {:ok, first} = Finance.db(10_000, 1_000, 5, 1, 6)
+      assert {:ok, first} = Finance.Depreciation.db(10_000, 1_000, 5, 1, 6)
       # First-year depreciation is prorated to 6 months.
       assert_in_delta first, 10_000 * 0.369 * 6 / 12, 1.0e-9
-      assert {:ok, last} = Finance.db(10_000, 1_000, 5, 6, 6)
+      assert {:ok, last} = Finance.Depreciation.db(10_000, 1_000, 5, 6, 6)
       assert last > 0
     end
 
     test "db rejects invalid input" do
-      assert Finance.db(0, 1_000, 5, 1) == {:error, :undefined}
-      assert Finance.db(10_000, 1_000, 5, 1, 13) == {:error, :undefined}
-      assert Finance.db(10_000, 1_000, 5, 2.5) == {:error, :undefined}
+      assert Finance.Depreciation.db(0, 1_000, 5, 1) == {:error, :undefined}
+      assert Finance.Depreciation.db(10_000, 1_000, 5, 1, 13) == {:error, :undefined}
+      assert Finance.Depreciation.db(10_000, 1_000, 5, 2.5) == {:error, :undefined}
     end
   end
 
   describe "volatility" do
     test "annualises the standard deviation of simple returns" do
-      assert Finance.volatility([100, 102, 101, 103, 105]) == {:ok, 0.234528}
+      assert Finance.Returns.volatility([100, 102, 101, 103, 105]) == {:ok, 0.234528}
     end
 
     test "supports log returns and a custom period count" do
-      assert Finance.volatility([100, 102, 101, 103, 105], returns: :log) == {:ok, 0.233384}
-      assert {:ok, monthly} = Finance.volatility([100, 102, 101, 103, 105], periods_per_year: 12)
+      assert Finance.Returns.volatility([100, 102, 101, 103, 105], returns: :log) ==
+               {:ok, 0.233384}
+
+      assert {:ok, monthly} =
+               Finance.Returns.volatility([100, 102, 101, 103, 105], periods_per_year: 12)
+
       assert_in_delta monthly, 0.051178, 1.0e-6
     end
 
     test "needs at least three prices" do
-      assert Finance.volatility([100, 105]) == {:error, :insufficient_data}
-      assert Finance.volatility([100]) == {:error, :insufficient_data}
-      assert Finance.volatility([]) == {:error, :insufficient_data}
+      assert Finance.Returns.volatility([100, 105]) == {:error, :insufficient_data}
+      assert Finance.Returns.volatility([100]) == {:error, :insufficient_data}
+      assert Finance.Returns.volatility([]) == {:error, :insufficient_data}
     end
 
     test "rejects non-positive prices" do
-      assert Finance.volatility([100, 0, 105]) == {:error, :undefined}
-      assert Finance.volatility([100, -5, 105]) == {:error, :undefined}
+      assert Finance.Returns.volatility([100, 0, 105]) == {:error, :undefined}
+      assert Finance.Returns.volatility([100, -5, 105]) == {:error, :undefined}
     end
 
     test "rejects unknown options" do
       assert_raise NimbleOptions.ValidationError, fn ->
-        Finance.volatility([100, 102, 105], returns: :geometric)
+        Finance.Returns.volatility([100, 102, 105], returns: :geometric)
       end
     end
 
     test "volatility!/1 returns the bare value and raises on error" do
-      assert Finance.volatility!([100, 102, 101, 103, 105]) == 0.234528
-      assert_raise ArgumentError, fn -> Finance.volatility!([100]) end
+      assert Finance.Returns.volatility!([100, 102, 101, 103, 105]) == 0.234528
+      assert_raise ArgumentError, fn -> Finance.Returns.volatility!([100]) end
     end
   end
 
@@ -526,7 +564,7 @@ defmodule FinanceTest do
         finish = Date.add(start, 365 * years)
         payout = principal * :math.pow(1 + rate, years)
 
-        assert {:ok, found} = Finance.xirr([{start, -principal}, {finish, payout}])
+        assert {:ok, found} = Finance.CashFlow.xirr([{start, -principal}, {finish, payout}])
         assert_in_delta found, rate, 1.0e-3
       end
     end
@@ -539,12 +577,12 @@ defmodule FinanceTest do
             ) do
         flows = [{~D[2000-01-01], outflow}, {Date.add(~D[2000-01-01], days), inflow}]
 
-        case Finance.xirr(flows, precision: 10) do
+        case Finance.CashFlow.xirr(flows, precision: 10) do
           # Near a total-loss rate (1 + r ≈ 0) discounting is numerically
           # singular: tiny rounding in `r` blows up the discount factor. Skip
           # those degenerate cases — they say nothing about the identity.
           {:ok, rate} when 1 + rate > 0.01 ->
-            assert {:ok, value} = Finance.xnpv(rate, flows, precision: 10)
+            assert {:ok, value} = Finance.CashFlow.xnpv(rate, flows, precision: 10)
             assert_in_delta value, 0.0, 1.0e-2 * (abs(inflow) + 1)
 
           _ ->
@@ -564,7 +602,7 @@ defmodule FinanceTest do
         # A high-precision rate keeps rounding error negligible even where the
         # discount factor is steep; the guard still skips the 1 + r ≈ 0
         # singularity, where any rounding makes the factor explode.
-        case Finance.xirr(flows, precision: 10) do
+        case Finance.CashFlow.xirr(flows, precision: 10) do
           {:ok, rate} when 1 + rate > 0.01 ->
             t = days / 365.0
             npv = outflow + inflow / :math.pow(1 + rate, t)
