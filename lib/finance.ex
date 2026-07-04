@@ -34,6 +34,8 @@ defmodule Finance do
       at equally spaced periods `0, 1, 2, …`.
     * **Time-value-of-money** — `fv/5`, `pv/5`, `pmt/5`, `nper/5`, and `rate/6`
       each solve the annuity equation for one unknown.
+    * **Depreciation** — `sln/3`, `syd/4`, `ddb/5`, and `db/5` write an asset
+      down from cost to salvage over its life.
 
   The flagship is XIRR, the rate `r` that zeroes the net present value of dated
   flows:
@@ -485,6 +487,153 @@ defmodule Finance do
     |> Map.update(0.0, pv * 1.0, &(&1 + pv))
     |> Map.update(nper * 1.0, fv * 1.0, &(&1 + fv))
     |> Map.to_list()
+  end
+
+  # === Depreciation ========================================================
+  #
+  # An asset of `cost` is written down to `salvage` over `life` periods. `sln`
+  # spreads the loss evenly; `syd`, `ddb`, and `db` are accelerated methods that
+  # depreciate more early on and return the amount for a single `period` (1-based).
+
+  @doc """
+  Straight-line depreciation: the equal per-period write-down of an asset from
+  `cost` to `salvage` over `life` periods.
+
+      iex> Finance.sln(10_000, 1_000, 5)
+      {:ok, 1800.0}
+  """
+  @spec sln(number, number, number) :: {:ok, float} | {:error, error}
+  def sln(cost, salvage, life)
+      when is_number(cost) and is_number(salvage) and is_number(life) do
+    if life == 0 do
+      {:error, :undefined}
+    else
+      {:ok, (cost - salvage) / life * 1.0}
+    end
+  end
+
+  @doc "Like `sln/3`, but returns the value directly and raises `ArgumentError` on error."
+  @spec sln!(number, number, number) :: float
+  def sln!(cost, salvage, life), do: cost |> sln(salvage, life) |> unwrap!()
+
+  @doc """
+  Sum-of-years'-digits depreciation for `period` (1-based), an accelerated method.
+
+      iex> Finance.syd(10_000, 1_000, 5, 1)
+      {:ok, 3000.0}
+
+      iex> Finance.syd(10_000, 1_000, 5, 5)
+      {:ok, 600.0}
+  """
+  @spec syd(number, number, number, number) :: {:ok, float} | {:error, error}
+  def syd(cost, salvage, life, period)
+      when is_number(cost) and is_number(salvage) and is_number(life) and is_number(period) do
+    if life <= 0 or period < 1 or period > life do
+      {:error, :undefined}
+    else
+      {:ok, (cost - salvage) * (life - period + 1) * 2 / (life * (life + 1)) * 1.0}
+    end
+  end
+
+  @doc "Like `syd/4`, but returns the value directly and raises `ArgumentError` on error."
+  @spec syd!(number, number, number, number) :: float
+  def syd!(cost, salvage, life, period), do: cost |> syd(salvage, life, period) |> unwrap!()
+
+  @doc """
+  Double-declining-balance depreciation for `period`. `factor` is the decline
+  rate multiplier (default `2` for double-declining). Depreciation never takes
+  the book value below `salvage`.
+
+      iex> Finance.ddb(10_000, 1_000, 5, 1)
+      {:ok, 4000.0}
+
+      iex> Finance.ddb(10_000, 1_000, 5, 2)
+      {:ok, 2400.0}
+  """
+  @spec ddb(number, number, number, number, number) :: {:ok, float} | {:error, error}
+  def ddb(cost, salvage, life, period, factor \\ 2)
+      when is_number(cost) and is_number(salvage) and is_number(life) and is_number(period) and
+             is_number(factor) do
+    n = trunc(period)
+
+    if life > 0 and factor > 0 and period == n and n >= 1 and n <= life do
+      {:ok, declining_balance(cost, salvage, factor / life, n)}
+    else
+      {:error, :undefined}
+    end
+  end
+
+  @doc "Like `ddb/5`, but returns the value directly and raises `ArgumentError` on error."
+  @spec ddb!(number, number, number, number, number) :: float
+  def ddb!(cost, salvage, life, period, factor \\ 2) do
+    cost |> ddb(salvage, life, period, factor) |> unwrap!()
+  end
+
+  @doc """
+  Fixed-declining-balance depreciation for `period`, using a rate derived from
+  `cost`, `salvage`, and `life` (rounded to three places, as spreadsheets do).
+  `month` is the number of months in the first year (default `12`).
+
+      iex> Finance.db(10_000, 1_000, 5, 1)
+      {:ok, 3690.0}
+
+      iex> Finance.db(10_000, 1_000, 5, 2)
+      {:ok, 2328.39}
+  """
+  @spec db(number, number, number, number, number) :: {:ok, float} | {:error, error}
+  def db(cost, salvage, life, period, month \\ 12)
+      when is_number(cost) and is_number(salvage) and is_number(life) and is_number(period) and
+             is_number(month) do
+    n = trunc(period)
+
+    if db_valid?(cost, salvage, life, month, period, n) do
+      {:ok, fixed_declining(cost, salvage, life, n, month)}
+    else
+      {:error, :undefined}
+    end
+  end
+
+  @doc "Like `db/5`, but returns the value directly and raises `ArgumentError` on error."
+  @spec db!(number, number, number, number, number) :: float
+  def db!(cost, salvage, life, period, month \\ 12) do
+    cost |> db(salvage, life, period, month) |> unwrap!()
+  end
+
+  defp db_valid?(cost, salvage, life, month, period, n) do
+    cost > 0 and salvage >= 0 and life > 0 and month >= 1 and month <= 12 and
+      period == n and n >= 1 and n <= life + 1
+  end
+
+  # Walk periods 1..period, carrying accumulated depreciation, and return the
+  # amount for the final period. Depreciation stops at the salvage floor.
+  defp declining_balance(cost, salvage, rate, period) do
+    Enum.reduce(1..period, {0.0, 0.0}, fn _p, {accumulated, _dep} ->
+      book = cost - accumulated
+      dep = max(min(book * rate, book - salvage), 0.0)
+      {accumulated + dep, dep}
+    end)
+    |> elem(1)
+  end
+
+  defp fixed_declining(cost, salvage, life, period, month) do
+    rate = Float.round(1 - :math.pow(salvage / cost, 1 / life), 3)
+
+    Enum.reduce(1..period, {0.0, 0.0}, fn p, {accumulated, _dep} ->
+      dep = db_period(cost, accumulated, rate, life, month, p)
+      {accumulated + dep, dep}
+    end)
+    |> elem(1)
+  end
+
+  defp db_period(cost, _accumulated, rate, _life, month, 1), do: cost * rate * month / 12
+
+  defp db_period(cost, accumulated, rate, life, month, period) do
+    if period <= life do
+      (cost - accumulated) * rate
+    else
+      # The partial last period when the first year was shorter than 12 months.
+      (cost - accumulated) * rate * (12 - month) / 12
+    end
   end
 
   # === Dispatch & shared helpers ===========================================

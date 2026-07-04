@@ -8,6 +8,8 @@
   (equally spaced) internal rate of return, net present value, and modified IRR.
 - `fv/5`, `pv/5`, `pmt/5`, `nper/5`, `rate/6` and their `!` variants —
   time-value-of-money scalars that solve the annuity equation for one unknown.
+- `sln/3`, `syd/4`, `ddb/5`, `db/5` and their `!` variants — straight-line,
+  sum-of-years'-digits, double-declining and fixed-declining depreciation.
 - Optional `Decimal` support: amounts may be `%Decimal{}` values when the
   (optional) `decimal` dependency is present. Results remain floats.
 - Option validation via `nimble_options`: unknown keys and out-of-type values

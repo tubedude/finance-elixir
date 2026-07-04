@@ -419,6 +419,65 @@ defmodule FinanceTest do
     end
   end
 
+  describe "depreciation" do
+    test "straight-line spreads the loss evenly" do
+      assert Finance.sln(10_000, 1_000, 5) == {:ok, 1800.0}
+      assert Finance.sln(10_000, 1_000, 0) == {:error, :undefined}
+      assert Finance.sln!(10_000, 1_000, 5) == 1800.0
+    end
+
+    test "sum-of-years'-digits accelerates then tapers" do
+      assert Finance.syd(10_000, 1_000, 5, 1) == {:ok, 3000.0}
+      assert Finance.syd(10_000, 1_000, 5, 5) == {:ok, 600.0}
+      # The four remaining years plus the first sum to the depreciable base.
+      total = for(p <- 1..5, do: elem(Finance.syd(10_000, 1_000, 5, p), 1)) |> Enum.sum()
+      assert_in_delta total, 9000.0, 1.0e-9
+    end
+
+    test "syd rejects out-of-range and non-positive life" do
+      assert Finance.syd(10_000, 1_000, 5, 6) == {:error, :undefined}
+      assert Finance.syd(10_000, 1_000, 5, 0) == {:error, :undefined}
+      assert Finance.syd(10_000, 1_000, 0, 1) == {:error, :undefined}
+      assert_raise ArgumentError, fn -> Finance.syd!(10_000, 1_000, 5, 6) end
+    end
+
+    test "double-declining balance never drops below salvage and sums to the base" do
+      assert Finance.ddb(10_000, 1_000, 5, 1) == {:ok, 4000.0}
+      assert Finance.ddb(10_000, 1_000, 5, 5) == {:ok, 296.0}
+      total = for(p <- 1..5, do: elem(Finance.ddb(10_000, 1_000, 5, p), 1)) |> Enum.sum()
+      assert_in_delta total, 9000.0, 1.0e-9
+    end
+
+    test "ddb honours a custom factor and rejects invalid input" do
+      assert {:ok, value} = Finance.ddb(10_000, 1_000, 5, 1, 3)
+      assert value == 6000.0
+      assert Finance.ddb(10_000, 1_000, 0, 1) == {:error, :undefined}
+      assert Finance.ddb(10_000, 1_000, 5, 2.5) == {:error, :undefined}
+      assert Finance.ddb(10_000, 1_000, 5, 6) == {:error, :undefined}
+      assert Finance.ddb!(10_000, 1_000, 5, 1) == 4000.0
+    end
+
+    test "fixed-declining balance with a full first year" do
+      assert Finance.db(10_000, 1_000, 5, 1) == {:ok, 3690.0}
+      assert Finance.db(10_000, 1_000, 5, 2) == {:ok, 2328.39}
+      assert Finance.db!(10_000, 1_000, 5, 1) == 3690.0
+    end
+
+    test "db with a short first year has a partial final period" do
+      assert {:ok, first} = Finance.db(10_000, 1_000, 5, 1, 6)
+      # First-year depreciation is prorated to 6 months.
+      assert_in_delta first, 10_000 * 0.369 * 6 / 12, 1.0e-9
+      assert {:ok, last} = Finance.db(10_000, 1_000, 5, 6, 6)
+      assert last > 0
+    end
+
+    test "db rejects invalid input" do
+      assert Finance.db(0, 1_000, 5, 1) == {:error, :undefined}
+      assert Finance.db(10_000, 1_000, 5, 1, 13) == {:error, :undefined}
+      assert Finance.db(10_000, 1_000, 5, 2.5) == {:error, :undefined}
+    end
+  end
+
   describe "properties" do
     # Build a two-flow investment with a known rate and confirm we recover it:
     # investing -P today and receiving P·(1+r)^years after `years` implies XIRR = r.
