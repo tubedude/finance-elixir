@@ -2,8 +2,14 @@
 
 [![CI](https://github.com/tubedude/finance-elixir/actions/workflows/ci.yml/badge.svg)](https://github.com/tubedude/finance-elixir/actions/workflows/ci.yml)
 
-A small, dependency-free Elixir library for calculating **XIRR** — the internal
-rate of return for cash flows that occur at irregular intervals.
+A small Elixir library for cash-flow analysis — internal rate of return
+(`xirr`/`irr`), net present value (`xnpv`/`npv`), and modified IRR (`mirr`). Its
+only dependency, `Decimal`, is optional, so by default it pulls in nothing.
+
+Functions come in two flavours: **dated** (`xirr`, `xnpv`) take flows at
+arbitrary dates on an Actual/365 basis, matching spreadsheet `XIRR`/`XNPV`;
+**periodic** (`irr`, `npv`, `mirr`) take a bare list of amounts at equally
+spaced periods.
 
 ## Installation
 
@@ -38,6 +44,35 @@ Finance.xirr([{2019, 1, 1}, {2020, 1, 1}], [-1000, 1100])
 ```
 
 `xirr!/1` and `xirr!/2` return the rate directly and raise on error.
+
+### Periodic functions
+
+For flows at equally spaced periods `0, 1, 2, …`, pass a bare amount list:
+
+```elixir
+Finance.irr([-1000, 500, 500, 300])                                  #=> {:ok, 0.156579}
+Finance.npv(0.1, [-1000, 600, 600])                                  #=> {:ok, 41.322314}
+Finance.mirr([-120_000, 39_000, 30_000, 21_000, 37_000, 46_000], 0.10, 0.12)
+#=> {:ok, 0.126094}
+```
+
+Note `npv/2` places the first amount at period 0 (so `npv(irr(a), a) ≈ 0`),
+which differs from spreadsheet `NPV` (first amount at period 1).
+
+### Amounts and Decimal
+
+Amounts may be any number — integer minor units (e.g. cents) or floats. If your
+app already depends on [`Decimal`](https://hex.pm/packages/decimal), amounts may
+be `Decimal` values directly, with no conversion on your side:
+
+```elixir
+Finance.xirr([{~D[2019-01-01], Decimal.new("-1000")}, {~D[2020-01-01], Decimal.new("1100")}])
+#=> {:ok, 0.1}
+```
+
+`Decimal` is an **optional** dependency: apps that don't use it carry no extra
+dependency. Results are always floats — XIRR's math is inherently irrational, so
+Decimal input is an input convenience, not extra precision.
 
 ### Errors
 

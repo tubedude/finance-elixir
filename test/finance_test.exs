@@ -225,6 +225,84 @@ defmodule FinanceTest do
     end
   end
 
+  describe "irr/1 (periodic)" do
+    test "simple two-flow investment" do
+      assert Finance.irr([-1000, 1100]) == {:ok, 0.1}
+    end
+
+    test "matches xirr on equally spaced annual dates" do
+      # Non-leap consecutive years give exactly one-year periods.
+      dates = [~D[2001-01-01], ~D[2002-01-01], ~D[2003-01-01], ~D[2004-01-01]]
+      amounts = [-1000, 500, 500, 300]
+      assert Finance.irr(amounts) == Finance.xirr(dates, amounts)
+    end
+
+    test "requires at least one positive and one negative amount" do
+      assert Finance.irr([100, 200, 300]) == {:error, :single_signed_flow}
+      assert Finance.irr([-500]) == {:error, :insufficient_data}
+    end
+
+    test "irr!/1 returns the bare rate and raises on error" do
+      assert Finance.irr!([-1000, 1100]) == 0.1
+      assert_raise ArgumentError, fn -> Finance.irr!([1, 2, 3]) end
+    end
+  end
+
+  describe "npv/2 (periodic)" do
+    test "first amount sits at period 0 (undiscounted)" do
+      # -1000 + 600/1.1 + 600/1.1^2
+      assert Finance.npv(0.1, [-1000, 600, 600]) == {:ok, 41.322314}
+    end
+
+    test "npv at the irr rate is ~zero" do
+      amounts = [-1000, 500, 500, 300]
+      assert {:ok, rate} = Finance.irr(amounts)
+      assert {:ok, value} = Finance.npv(rate, amounts)
+      assert_in_delta value, 0.0, 1.0e-3
+    end
+
+    test "empty series is an error" do
+      assert Finance.npv(0.1, []) == {:error, :insufficient_data}
+    end
+
+    test "npv!/2 returns the bare value" do
+      assert Finance.npv!(0.1, [-1000, 1100]) == 0.0
+    end
+  end
+
+  describe "mirr/3" do
+    test "Microsoft's documented example" do
+      values = [-120_000, 39_000, 30_000, 21_000, 37_000, 46_000]
+      assert Finance.mirr(values, 0.10, 0.12) == {:ok, 0.126094}
+    end
+
+    test "requires both an inflow and an outflow" do
+      assert Finance.mirr([100, 200], 0.1, 0.1) == {:error, :single_signed_flow}
+      assert Finance.mirr([-100], 0.1, 0.1) == {:error, :insufficient_data}
+    end
+
+    test "mirr!/3 returns the bare rate" do
+      values = [-120_000, 39_000, 30_000, 21_000, 37_000, 46_000]
+      assert Finance.mirr!(values, 0.10, 0.12) == 0.126094
+    end
+  end
+
+  describe "Decimal amounts (optional dependency)" do
+    test "xirr accepts Decimal amounts, matching float results" do
+      decimals = [{~D[2019-01-01], Decimal.new("-1000")}, {~D[2020-01-01], Decimal.new("1100")}]
+      floats = [{~D[2019-01-01], -1000.0}, {~D[2020-01-01], 1100.0}]
+      assert Finance.xirr(decimals) == Finance.xirr(floats)
+      assert Finance.xirr(decimals) == {:ok, 0.1}
+    end
+
+    test "periodic functions accept Decimal amounts" do
+      assert Finance.irr([Decimal.new("-1000"), Decimal.new("1100")]) == {:ok, 0.1}
+
+      assert Finance.mirr([Decimal.new("-100"), Decimal.new("50"), Decimal.new("80")], 0.1, 0.1) ==
+               Finance.mirr([-100, 50, 80], 0.1, 0.1)
+    end
+  end
+
   describe "properties" do
     # Build a two-flow investment with a known rate and confirm we recover it:
     # investing -P today and receiving P·(1+r)^years after `years` implies XIRR = r.

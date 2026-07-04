@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- `xnpv/2,3` and `xnpv!/2` — net present value of dated cash flows.
+- `irr/1,2`, `npv/2,3`, `mirr/3,4` and their `!` variants — periodic
+  (equally spaced) internal rate of return, net present value, and modified IRR.
+- Optional `Decimal` support: amounts may be `%Decimal{}` values when the
+  (optional) `decimal` dependency is present. Results remain floats.
+
+### Notes
+- Periodic `npv/2` places the first amount at period 0 (so `npv(irr(a), a) ≈ 0`),
+  which differs from spreadsheet `NPV` (first amount at period 1).
+
 ## 1.0.0
 
 Complete rewrite. **Breaking changes** — some return values differ from 0.x

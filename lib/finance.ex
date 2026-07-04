@@ -1,31 +1,40 @@
 defmodule Finance do
   @moduledoc """
-  Calculates the **XIRR** — the internal rate of return for a series of cash
-  flows that occur at irregular intervals.
+  Cash-flow analysis: internal rate of return, net present value, and modified IRR.
 
-  Given cash flows `cf_i` at times `t_i` (in years from the earliest flow),
-  XIRR is the rate `r` that solves:
+  Functions come in two flavours:
+
+    * **Dated** — `xirr/2` and `xnpv/2` take `{date, amount}` flows at arbitrary
+      dates and discount on an Actual/365 basis, matching the spreadsheet
+      `XIRR`/`XNPV` convention.
+    * **Periodic** — `irr/1`, `npv/2`, and `mirr/3` take a bare list of amounts
+      at equally spaced periods `0, 1, 2, …`.
+
+  The flagship is XIRR, the rate `r` that zeroes the net present value of dated
+  flows:
 
       Σ cf_i / (1 + r)^t_i = 0
 
-  The solver uses Newton-Raphson (fast, analytic derivative) and falls back to
-  a bracketing bisection when Newton leaves the valid domain or fails to
-  converge. It follows the same conventions as spreadsheet `XIRR` functions —
-  an Actual/365 day count, a default `0.1` initial guess, and a 100-iteration
-  cap — and has no runtime dependencies.
+  where `t_i` is the number of years from the earliest flow. The solver uses
+  Newton-Raphson (fast, analytic derivative) with a bracketing bisection
+  fallback when Newton leaves the valid domain or fails to converge; it follows
+  the spreadsheet `XIRR` conventions (Actual/365, a `0.1` initial guess, a
+  100-iteration cap).
 
   ## Example
 
       iex> Finance.xirr([{~D[2019-01-01], -1000}, {~D[2020-01-01], 1100}])
       {:ok, 0.1}
 
-  Cash flows may be given as `{date, amount}` pairs (see `xirr/2`) or as two
-  parallel lists of dates and amounts. Dates may be `Date` structs or
-  Erlang-style `{year, month, day}` tuples.
+  Dated flows may be `{date, amount}` pairs or two parallel lists; dates may be
+  `Date` structs or Erlang-style `{year, month, day}` tuples. Amounts may be any
+  number (integer minor units such as cents, or floats) or a `Decimal` when that
+  optional dependency is installed — results are always floats. `Decimal` is the
+  library's only dependency and it is optional, so by default nothing is pulled in.
 
   ## Options
 
-  The `{date, amount}` form accepts a keyword list:
+  The rate-finding and value functions accept a keyword list:
 
     * `:guess` — initial rate for Newton-Raphson (default `0.1`)
     * `:tolerance` — convergence threshold on the net present value (default `1.0e-9`)
@@ -36,8 +45,11 @@ defmodule Finance do
   @typedoc "A `Date` struct or an Erlang-style `{year, month, day}` tuple."
   @type date :: Date.t() | {integer, integer, integer}
 
+  @typedoc "A cash-flow amount: any number, or a `Decimal` if that optional dependency is installed."
+  @type amount :: number | Decimal.t()
+
   @typedoc "A dated cash flow. Positive amounts are inflows, negative are outflows."
-  @type cash_flow :: {date, number}
+  @type cash_flow :: {date, amount}
 
   @typedoc "An annual rate of return, e.g. `0.1` for 10%."
   @type rate :: float
@@ -58,6 +70,8 @@ defmodule Finance do
   @days_in_year 365.0
 
   @default_options [guess: 0.1, tolerance: 1.0e-9, max_iterations: 100, precision: 6]
+
+  # === XIRR — internal rate of return for dated flows ======================
 
   @doc """
   Calculates the XIRR for a list of `{date, amount}` cash flows.
@@ -85,7 +99,7 @@ defmodule Finance do
       {:ok, 0.1}
   """
   @spec xirr([cash_flow], [option]) :: {:ok, rate} | {:error, error}
-  @spec xirr([date], [number]) :: {:ok, rate} | {:error, error}
+  @spec xirr([date], [amount]) :: {:ok, rate} | {:error, error}
   def xirr(first, second) when is_list(first) and is_list(second) do
     if options?(second) do
       compute(first, second)
@@ -100,7 +114,7 @@ defmodule Finance do
       iex> Finance.xirr([~D[2019-01-01], ~D[2020-01-01]], [-1000, 1100], precision: 2)
       {:ok, 0.1}
   """
-  @spec xirr([date], [number], [option]) :: {:ok, rate} | {:error, error}
+  @spec xirr([date], [amount], [option]) :: {:ok, rate} | {:error, error}
   def xirr(dates, values, opts)
       when is_list(dates) and is_list(values) and is_list(opts) do
     zip(dates, values, opts)
@@ -111,8 +125,10 @@ defmodule Finance do
   def xirr!(cash_flows), do: cash_flows |> xirr() |> unwrap!()
 
   @doc "Like `xirr/2`, but returns the rate directly and raises `ArgumentError` on error."
-  @spec xirr!([cash_flow] | [date], [option] | [number]) :: rate
+  @spec xirr!([cash_flow] | [date], [option] | [amount]) :: rate
   def xirr!(first, second), do: first |> xirr(second) |> unwrap!()
+
+  # === XNPV — net present value of dated flows =============================
 
   @doc """
   Calculates the **XNPV** — the net present value of dated cash flows discounted
@@ -143,11 +159,8 @@ defmodule Finance do
   @spec xnpv(rate, [cash_flow], [option]) :: {:ok, number} | {:error, error}
   def xnpv(rate, cash_flows, opts)
       when is_number(rate) and is_list(cash_flows) and is_list(opts) do
-    precision = @default_options |> Keyword.merge(opts) |> Keyword.fetch!(:precision)
-
     with {:ok, flows} <- normalize(cash_flows) do
-      # `+ 0.0` collapses a floating-point negative zero to `0.0`.
-      {:ok, Float.round(npv(flows, rate), precision) + 0.0}
+      {:ok, round_value(present_value(flows, rate), opts)}
     end
   end
 
@@ -155,7 +168,131 @@ defmodule Finance do
   @spec xnpv!(rate, [cash_flow]) :: number
   def xnpv!(rate, cash_flows), do: rate |> xnpv(cash_flows) |> unwrap!()
 
-  # --- Dispatch helpers ----------------------------------------------------
+  # === IRR — internal rate of return for periodic flows ====================
+
+  @doc """
+  Calculates the **IRR** — the internal rate of return for amounts at equally
+  spaced periods `0, 1, 2, …`. The periodic counterpart of `xirr/2`.
+
+  The result is the per-period rate. The series must contain at least one
+  positive and one negative amount.
+
+      iex> Finance.irr([-1000, 1100])
+      {:ok, 0.1}
+
+      iex> Finance.irr([-1000, 500, 500, 300])
+      {:ok, 0.156579}
+  """
+  @spec irr([amount]) :: {:ok, rate} | {:error, error}
+  def irr(amounts) when is_list(amounts), do: irr(amounts, [])
+
+  @doc "Like `irr/1`, but accepts the same options as `xirr/2`."
+  @spec irr([amount], [option]) :: {:ok, rate} | {:error, error}
+  def irr(amounts, opts) when is_list(amounts) and is_list(opts) do
+    flows = periodic_flows(amounts)
+
+    with :ok <- validate(flows) do
+      solve(flows, Keyword.merge(@default_options, opts))
+    end
+  end
+
+  @doc "Like `irr/1`, but returns the rate directly and raises `ArgumentError` on error."
+  @spec irr!([amount], [option]) :: rate
+  def irr!(amounts, opts \\ []), do: amounts |> irr(opts) |> unwrap!()
+
+  # === NPV — net present value of periodic flows ===========================
+
+  @doc """
+  Calculates the periodic **NPV** — the net present value of `amounts` at
+  equally spaced periods `0, 1, 2, …` discounted at `rate`.
+
+      Σ amount_i / (1 + rate)^i    (i starting at 0)
+
+  > #### Convention {: .info}
+  > The first amount sits at period 0 (undiscounted), so `npv(irr(a), a)` is
+  > `~0`. This differs from spreadsheet `NPV`, which places the first amount at
+  > period 1; to match a spreadsheet, discount the first amount yourself or pass
+  > it with a leading `0`.
+
+      iex> Finance.npv(0.1, [-1000, 1100])
+      {:ok, 0.0}
+
+      iex> Finance.npv(0.1, [-1000, 600, 600])
+      {:ok, 41.322314}
+  """
+  @spec npv(rate, [amount]) :: {:ok, number} | {:error, error}
+  def npv(rate, amounts) when is_number(rate) and is_list(amounts) do
+    npv(rate, amounts, [])
+  end
+
+  @doc "Like `npv/2`, but accepts a `:precision` option. See `npv/2`."
+  @spec npv(rate, [amount], [option]) :: {:ok, number} | {:error, error}
+  def npv(_rate, [], _opts), do: {:error, :insufficient_data}
+
+  def npv(rate, amounts, opts)
+      when is_number(rate) and is_list(amounts) and is_list(opts) do
+    {:ok, round_value(present_value(periodic_flows(amounts), rate), opts)}
+  end
+
+  @doc "Like `npv/2`, but returns the value directly and raises `ArgumentError` on error."
+  @spec npv!(rate, [amount]) :: number
+  def npv!(rate, amounts), do: rate |> npv(amounts) |> unwrap!()
+
+  # === MIRR — modified internal rate of return =============================
+
+  @doc """
+  Calculates the **MIRR** — the modified internal rate of return for periodic
+  `amounts`, where positive flows are reinvested at `reinvest_rate` and negative
+  flows are financed at `finance_rate`.
+
+  Unlike `irr/1`, MIRR is a closed-form calculation with a single answer, so it
+  sidesteps the multiple-root and convergence problems IRR can hit. The series
+  must contain at least one positive and one negative amount.
+
+      iex> Finance.mirr([-120_000, 39_000, 30_000, 21_000, 37_000, 46_000], 0.10, 0.12)
+      {:ok, 0.126094}
+  """
+  @spec mirr([amount], number, number, [option]) :: {:ok, rate} | {:error, error}
+  def mirr(amounts, finance_rate, reinvest_rate, opts \\ [])
+      when is_list(amounts) and is_number(finance_rate) and is_number(reinvest_rate) and
+             is_list(opts) do
+    values = Enum.map(amounts, &to_amount/1)
+    n = length(values)
+
+    cond do
+      n < 2 -> {:error, :insufficient_data}
+      not signed_both_ways?(values) -> {:error, :single_signed_flow}
+      true -> {:ok, round_value(modified_irr(values, finance_rate, reinvest_rate, n), opts)}
+    end
+  end
+
+  @doc "Like `mirr/3`, but returns the rate directly and raises `ArgumentError` on error."
+  @spec mirr!([amount], number, number, [option]) :: rate
+  def mirr!(amounts, finance_rate, reinvest_rate, opts \\ []) do
+    amounts |> mirr(finance_rate, reinvest_rate, opts) |> unwrap!()
+  end
+
+  defp modified_irr(values, finance_rate, reinvest_rate, n) do
+    periods = n - 1
+
+    future_of_inflows =
+      values
+      |> Enum.with_index()
+      |> Enum.reduce(0.0, fn {value, i}, acc ->
+        if value > 0, do: acc + value * :math.pow(1 + reinvest_rate, periods - i), else: acc
+      end)
+
+    present_of_outflows =
+      values
+      |> Enum.with_index()
+      |> Enum.reduce(0.0, fn {value, i}, acc ->
+        if value < 0, do: acc + value / :math.pow(1 + finance_rate, i), else: acc
+      end)
+
+    :math.pow(future_of_inflows / -present_of_outflows, 1 / periods) - 1
+  end
+
+  # === Dispatch & shared helpers ===========================================
 
   # An empty list or a proper keyword list is treated as options. A list of
   # `{date, amount}` pairs is not a keyword list (its keys are dates, not
@@ -179,7 +316,13 @@ defmodule Finance do
     end
   end
 
-  defp unwrap!({:ok, rate}), do: rate
+  # `+ 0.0` collapses a floating-point negative zero to `0.0`.
+  defp round_value(value, opts) do
+    precision = @default_options |> Keyword.merge(opts) |> Keyword.fetch!(:precision)
+    Float.round(value, precision) + 0.0
+  end
+
+  defp unwrap!({:ok, value}), do: value
   defp unwrap!({:error, reason}), do: raise(ArgumentError, "could not compute: #{reason}")
 
   # --- Normalization -------------------------------------------------------
@@ -189,7 +332,7 @@ defmodule Finance do
   defp normalize([]), do: {:error, :insufficient_data}
 
   defp normalize(cash_flows) do
-    parsed = Enum.map(cash_flows, fn {date, amount} -> {to_date(date), amount / 1} end)
+    parsed = Enum.map(cash_flows, fn {date, amount} -> {to_date(date), to_amount(amount)} end)
     min_date = parsed |> Enum.map(&elem(&1, 0)) |> Enum.min(Date)
 
     flows =
@@ -205,8 +348,21 @@ defmodule Finance do
     _ in [ArgumentError, FunctionClauseError] -> {:error, :invalid_date}
   end
 
+  # Build position-indexed flows (period 0, 1, 2, …) for the periodic functions.
+  defp periodic_flows(amounts) do
+    amounts
+    |> Enum.with_index()
+    |> Enum.map(fn {amount, index} -> {index / 1, to_amount(amount)} end)
+  end
+
   defp to_date(%Date{} = date), do: date
   defp to_date({y, m, d}), do: Date.from_erl!({y, m, d})
+
+  # Coerce a cash-flow amount to a float. Accepts plain numbers and, when the
+  # optional Decimal dependency is present, `%Decimal{}` values. Shared by every
+  # normalizer so the whole function family accepts the same inputs.
+  defp to_amount(%Decimal{} = amount), do: Decimal.to_float(amount)
+  defp to_amount(amount) when is_number(amount), do: amount / 1
 
   defp validate(flows) do
     amounts = Enum.map(flows, &elem(&1, 1))
@@ -246,8 +402,8 @@ defmodule Finance do
   defp newton(_flows, _rate, 0, _tol), do: :diverged
 
   defp newton(flows, rate, iterations, tol) do
-    f = npv(flows, rate)
-    derivative = dnpv(flows, rate)
+    f = present_value(flows, rate)
+    derivative = present_value_derivative(flows, rate)
 
     cond do
       abs(f) < tol -> {:ok, rate}
@@ -268,7 +424,7 @@ defmodule Finance do
   defp bisect(flows, max_iterations, tol) do
     low = -0.999999
 
-    case bracket(flows, low, npv(flows, low), 1.0) do
+    case bracket(flows, low, present_value(flows, low), 1.0) do
       {:ok, low, high} -> {:ok, bisection(flows, low, high, max_iterations, tol)}
       :diverged -> :diverged
     end
@@ -278,7 +434,7 @@ defmodule Finance do
   defp bracket(_flows, _low, _f_low, high) when high > 1.0e7, do: :diverged
 
   defp bracket(flows, low, f_low, high) do
-    if f_low * npv(flows, high) <= 0 do
+    if f_low * present_value(flows, high) <= 0 do
       {:ok, low, high}
     else
       bracket(flows, low, f_low, high * 2 + 1)
@@ -289,24 +445,24 @@ defmodule Finance do
 
   defp bisection(flows, low, high, iterations, tol) do
     mid = (low + high) / 2
-    f_mid = npv(flows, mid)
+    f_mid = present_value(flows, mid)
 
     cond do
       abs(f_mid) < tol or high - low < tol -> mid
-      npv(flows, low) * f_mid < 0 -> bisection(flows, low, mid, iterations - 1, tol)
+      present_value(flows, low) * f_mid < 0 -> bisection(flows, low, mid, iterations - 1, tol)
       true -> bisection(flows, mid, high, iterations - 1, tol)
     end
   end
 
   # Net present value: Σ amount / (1 + rate)^t
-  defp npv(flows, rate) do
+  defp present_value(flows, rate) do
     Enum.reduce(flows, 0.0, fn {t, amount}, acc ->
       acc + amount / :math.pow(1 + rate, t)
     end)
   end
 
   # Derivative of the NPV with respect to rate: Σ -t · amount / (1 + rate)^(t+1)
-  defp dnpv(flows, rate) do
+  defp present_value_derivative(flows, rate) do
     Enum.reduce(flows, 0.0, fn {t, amount}, acc ->
       acc + -t * amount / :math.pow(1 + rate, t + 1)
     end)
