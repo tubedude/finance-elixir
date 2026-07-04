@@ -14,6 +14,7 @@ defmodule FinanceTest do
   doctest Finance.Depreciation
   doctest Finance.Returns
   doctest Finance.Rates
+  doctest Finance.Bonds
 
   describe "module organization" do
     test "the solver is swappable via the :solver option" do
@@ -596,6 +597,56 @@ defmodule FinanceTest do
     test "bang variants return the bare value and raise on error" do
       assert Finance.TVM.ipmt!(0.0, 3, 12, 1200) == 0.0
       assert_raise ArgumentError, fn -> Finance.TVM.ppmt!(0.10 / 12, 13, 12, 1000) end
+    end
+  end
+
+  describe "Finance.Bonds" do
+    test "price and ytm are inverses" do
+      assert {:ok, price} = Finance.Bonds.price(1000, 0.08, 0.10, 10)
+      assert Finance.Bonds.ytm(1000, 0.08, price, 10) == {:ok, 0.1}
+    end
+
+    test "a par bond yields its coupon rate" do
+      assert Finance.Bonds.price(100, 0.05, 0.05, 10) == {:ok, 100.0}
+      assert Finance.Bonds.ytm(100, 0.05, 100.0, 10) == {:ok, 0.05}
+    end
+
+    test "degenerate maturity is undefined across the module" do
+      assert Finance.Bonds.price(100, 0.05, 0.05, 0) == {:error, :undefined}
+      assert Finance.Bonds.ytm(100, 0.05, 100.0, -1) == {:error, :undefined}
+      assert Finance.Bonds.duration(0.05, 0.05, 0) == {:error, :undefined}
+      assert Finance.Bonds.modified_duration(0.05, 0.05, 0) == {:error, :undefined}
+      assert Finance.Bonds.convexity(0.05, 0.05, 0) == {:error, :undefined}
+      # a fractional number of coupon periods is also undefined
+      assert Finance.Bonds.price(100, 0.05, 0.05, 2.5, 1) == {:error, :undefined}
+      assert Finance.Bonds.price(100, 0.05, 0.05, 10, 0) == {:error, :undefined}
+    end
+
+    test "ytm does not converge when no yield brackets the price" do
+      assert Finance.Bonds.ytm(100, 0.05, -50.0, 10) == {:error, :did_not_converge}
+    end
+
+    test "bang variants return bare values and raise on error" do
+      assert Finance.Bonds.price!(100, 0.05, 0.05, 10) == 100.0
+      assert Finance.Bonds.ytm!(100, 0.05, 100.0, 10) == 0.05
+      assert Finance.Bonds.duration!(0.0, 0.05, 10, 1) == 10.0
+      assert Finance.Bonds.modified_duration!(0.0, 0.05, 10, 1) == 9.52381
+      assert Finance.Bonds.convexity!(0.0, 0.05, 10, 1) == 99.773243
+      assert_raise ArgumentError, fn -> Finance.Bonds.price!(100, 0.05, 0.05, 0) end
+    end
+  end
+
+  property "ytm recovers the yield a bond was priced at" do
+    check all(
+            coupon_bp <- integer(0..1500),
+            yield_bp <- integer(100..1500),
+            years <- integer(1..30)
+          ) do
+      coupon = coupon_bp / 10_000
+      yield = yield_bp / 10_000
+      assert {:ok, price} = Finance.Bonds.price(1000, coupon, yield, years)
+      assert {:ok, recovered} = Finance.Bonds.ytm(1000, coupon, price, years)
+      assert_in_delta recovered, yield, 1.0e-3
     end
   end
 
