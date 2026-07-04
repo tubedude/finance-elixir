@@ -2,15 +2,17 @@
 
 [![CI](https://github.com/tubedude/finance-elixir/actions/workflows/ci.yml/badge.svg)](https://github.com/tubedude/finance-elixir/actions/workflows/ci.yml)
 
-A small Elixir library for cash-flow analysis — internal rate of return
-(`xirr`/`irr`), net present value (`xnpv`/`npv`), and modified IRR (`mirr`). It
-uses `nimble_options` to validate options, and supports `Decimal` amounts when
-that optional dependency is present.
+An Elixir library for cash-flow analysis. It covers internal rate of return
+(`xirr`/`irr`), net present value (`xnpv`/`npv`), and modified IRR (`mirr`),
+along with the usual time-value-of-money and depreciation helpers. Options are
+validated with `nimble_options`, and amounts may be `Decimal` values when you
+have that optional dependency installed.
 
-Functions come in two flavours: **dated** (`xirr`, `xnpv`) take flows at
-arbitrary dates on an Actual/365 basis, matching spreadsheet `XIRR`/`XNPV`;
-**periodic** (`irr`, `npv`, `mirr`) take a bare list of amounts at equally
-spaced periods.
+The rate and value functions come in two forms. The **dated** ones (`xirr`,
+`xnpv`) work with flows that land on arbitrary dates, discounting on an
+Actual/365 basis to match spreadsheet `XIRR`/`XNPV`. The **periodic** ones
+(`irr`, `npv`, `mirr`) take a plain list of amounts spread over equally spaced
+periods, for when the exact dates don't matter.
 
 ## Installation
 
@@ -22,12 +24,14 @@ def deps do
 end
 ```
 
-To also accept `Decimal` amounts, add `{:decimal, "~> 3.0"}` alongside it.
+If you also want to pass `Decimal` amounts, add `{:decimal, "~> 3.0"}` alongside
+it.
 
 ## Usage
 
-Pass a list of `{date, amount}` cash flows. Positive amounts are inflows,
-negative are outflows. The series must contain at least one of each.
+Pass a list of `{date, amount}` cash flows. Money coming in is positive and money
+going out is negative, and the series needs at least one of each — without flows
+in both directions there is no rate to solve for.
 
 ```elixir
 Finance.xirr([
@@ -38,19 +42,20 @@ Finance.xirr([
 #=> {:ok, 21.118359}
 ```
 
-Dates may also be `{year, month, day}` tuples, and you can supply two parallel
-lists instead of pairs:
+Dates can also be `{year, month, day}` tuples, and if it reads better you can
+supply two parallel lists instead of pairs:
 
 ```elixir
 Finance.xirr([{2019, 1, 1}, {2020, 1, 1}], [-1000, 1100])
 #=> {:ok, 0.1}
 ```
 
-`xirr!/1` and `xirr!/2` return the rate directly and raise on error.
+If you would rather work with the rate directly than unwrap an `:ok` tuple,
+`xirr!/1` and `xirr!/2` return it on its own and raise on error.
 
 ### Periodic functions
 
-For flows at equally spaced periods `0, 1, 2, …`, pass a bare amount list:
+For flows at equally spaced periods `0, 1, 2, …`, pass a plain list of amounts:
 
 ```elixir
 Finance.irr([-1000, 500, 500, 300])                                  #=> {:ok, 0.156579}
@@ -59,27 +64,30 @@ Finance.mirr([-120_000, 39_000, 30_000, 21_000, 37_000, 46_000], 0.10, 0.12)
 #=> {:ok, 0.126094}
 ```
 
-Note `npv/2` places the first amount at period 0 (so `npv(irr(a), a) ≈ 0`),
-which differs from spreadsheet `NPV` (first amount at period 1).
+One thing to watch: `npv/2` places the first amount at period 0, which is what
+makes `npv(irr(a), a) ≈ 0` hold. A spreadsheet `NPV` instead places the first
+amount at period 1, so the two won't agree unless you account for that.
 
 ### Amounts and Decimal
 
-Amounts may be any number — integer minor units (e.g. cents) or floats. If your
-app already depends on [`Decimal`](https://hex.pm/packages/decimal), amounts may
-be `Decimal` values directly, with no conversion on your side:
+Amounts may be any number — integer minor units such as cents, or floats. If your
+app already depends on [`Decimal`](https://hex.pm/packages/decimal), you can pass
+`Decimal` values straight through, with no conversion on your side:
 
 ```elixir
 Finance.xirr([{~D[2019-01-01], Decimal.new("-1000")}, {~D[2020-01-01], Decimal.new("1100")}])
 #=> {:ok, 0.1}
 ```
 
-`Decimal` is an **optional** dependency: apps that don't use it carry no extra
-dependency. Results are always floats — XIRR's math is inherently irrational, so
-Decimal input is an input convenience, not extra precision.
+`Decimal` is an optional dependency, so apps that don't use it pull in nothing
+extra. Either way the result comes back as a float: XIRR's math is inherently
+irrational, so accepting `Decimal` is about convenience at the call site, not
+added precision in the answer.
 
 ### Errors
 
-`xirr/1` and `xirr/2` return `{:error, reason}` where `reason` is one of:
+When the data can't produce a result, `xirr/1` and `xirr/2` return
+`{:error, reason}`, where `reason` is one of:
 
 | Reason                 | Meaning                                         |
 | ---------------------- | ----------------------------------------------- |
