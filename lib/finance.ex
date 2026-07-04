@@ -740,11 +740,12 @@ defmodule Finance do
   and annualises by `√periods_per_year`. At least three prices are needed, and
   every price must be positive.
 
-  ## Options
-  #{NimbleOptions.docs(@volatility_options_schema)}
-
       iex> Finance.volatility([100, 102, 101, 103, 105])
       {:ok, 0.234528}
+
+  ## Options
+
+  #{NimbleOptions.docs(@volatility_options_schema)}
   """
   @spec volatility([number], keyword) :: {:ok, float} | {:error, error}
   def volatility(prices, opts \\ []) when is_list(prices) do
