@@ -18,9 +18,11 @@ Add `finance` to your dependencies in `mix.exs`:
 
 ```elixir
 def deps do
-  [{:finance, git: "https://github.com/tubedude/finance-elixir.git", tag: "1.0.0"}]
+  [{:finance, "~> 1.0"}]
 end
 ```
+
+To also accept `Decimal` amounts, add `{:decimal, "~> 3.0"}` alongside it.
 
 ## Usage
 

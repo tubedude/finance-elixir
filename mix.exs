@@ -35,7 +35,8 @@ defmodule Finance.MixProject do
   end
 
   defp description do
-    "A dependency-free library to calculate XIRR (irregular internal rate of return)."
+    "Cash-flow analysis for Elixir: XIRR/IRR, net present value, modified IRR, " <>
+      "time-value-of-money, and depreciation."
   end
 
   defp package do
