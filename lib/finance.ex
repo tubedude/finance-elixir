@@ -114,6 +114,47 @@ defmodule Finance do
   @spec xirr!([cash_flow] | [date], [option] | [number]) :: rate
   def xirr!(first, second), do: first |> xirr(second) |> unwrap!()
 
+  @doc """
+  Calculates the **XNPV** — the net present value of dated cash flows discounted
+  at `rate`.
+
+      Σ cf_i / (1 + rate)^t_i
+
+  Times `t_i` are years from the earliest flow (Actual/365), the same
+  convention `xirr/2` uses — so `xnpv(r, flows)` is `~0` at `r = xirr(flows)`,
+  which makes it a natural way to verify an XIRR result. Unlike `xirr/2`, the
+  flows need not change sign; NPV is defined for any series.
+
+  Returns `{:ok, value}` or `{:error, reason}`. Flows on the same date are
+  combined. Accepts the same `:precision` option as `xirr/2` (default `6`).
+
+      iex> Finance.xnpv(0.1, [{~D[2019-01-01], -1000}, {~D[2020-01-01], 1000}])
+      {:ok, -90.909091}
+
+      iex> Finance.xnpv(0.1, [{~D[2019-01-01], -1000}, {~D[2020-01-01], 1100}])
+      {:ok, 0.0}
+  """
+  @spec xnpv(rate, [cash_flow]) :: {:ok, number} | {:error, error}
+  def xnpv(rate, cash_flows) when is_number(rate) and is_list(cash_flows) do
+    xnpv(rate, cash_flows, [])
+  end
+
+  @doc "Like `xnpv/2`, but accepts a `:precision` option. See `xnpv/2`."
+  @spec xnpv(rate, [cash_flow], [option]) :: {:ok, number} | {:error, error}
+  def xnpv(rate, cash_flows, opts)
+      when is_number(rate) and is_list(cash_flows) and is_list(opts) do
+    precision = @default_options |> Keyword.merge(opts) |> Keyword.fetch!(:precision)
+
+    with {:ok, flows} <- normalize(cash_flows) do
+      # `+ 0.0` collapses a floating-point negative zero to `0.0`.
+      {:ok, Float.round(npv(flows, rate), precision) + 0.0}
+    end
+  end
+
+  @doc "Like `xnpv/2`, but returns the value directly and raises `ArgumentError` on error."
+  @spec xnpv!(rate, [cash_flow]) :: number
+  def xnpv!(rate, cash_flows), do: rate |> xnpv(cash_flows) |> unwrap!()
+
   # --- Dispatch helpers ----------------------------------------------------
 
   # An empty list or a proper keyword list is treated as options. A list of
@@ -139,7 +180,7 @@ defmodule Finance do
   end
 
   defp unwrap!({:ok, rate}), do: rate
-  defp unwrap!({:error, reason}), do: raise(ArgumentError, "could not compute xirr: #{reason}")
+  defp unwrap!({:error, reason}), do: raise(ArgumentError, "could not compute: #{reason}")
 
   # --- Normalization -------------------------------------------------------
 

@@ -192,6 +192,39 @@ defmodule FinanceTest do
     end
   end
 
+  describe "xnpv/2" do
+    test "discounts a single future flow" do
+      flows = [{~D[2019-01-01], -1000}, {~D[2020-01-01], 1000}]
+      assert Finance.xnpv(0.1, flows) == {:ok, -90.909091}
+    end
+
+    test "does not require a sign change" do
+      flows = [{~D[2019-01-01], 500}, {~D[2020-01-01], 500}]
+      assert {:ok, value} = Finance.xnpv(0.1, flows)
+      assert_in_delta value, 500 + 500 / 1.1, 1.0e-6
+    end
+
+    test ":precision controls rounding" do
+      flows = [{~D[2019-01-01], -1000}, {~D[2020-01-01], 1000}]
+      assert {:ok, value} = Finance.xnpv(0.1, flows, precision: 2)
+      assert value == -90.91
+    end
+
+    test "combines flows on the same date" do
+      flows = [{~D[2019-01-01], -1000}, {~D[2019-01-01], 400}, {~D[2020-01-01], 1000}]
+      assert Finance.xnpv(0.1, flows) == {:ok, 309.090909}
+    end
+
+    test "propagates normalization errors" do
+      assert Finance.xnpv(0.1, []) == {:error, :insufficient_data}
+    end
+
+    test "xnpv!/2 returns the bare value and raises on error" do
+      assert Finance.xnpv!(0.1, [{~D[2019-01-01], -1000}, {~D[2020-01-01], 1100}]) == 0.0
+      assert_raise ArgumentError, fn -> Finance.xnpv!(0.1, []) end
+    end
+  end
+
   describe "properties" do
     # Build a two-flow investment with a known rate and confirm we recover it:
     # investing -P today and receiving P·(1+r)^years after `years` implies XIRR = r.
@@ -211,6 +244,28 @@ defmodule FinanceTest do
       end
     end
 
+    property "xnpv at the xirr rate is ~zero" do
+      check all(
+              outflow <- integer(-1_000_000..-1),
+              inflow <- integer(1..1_000_000),
+              days <- integer(1..3650)
+            ) do
+        flows = [{~D[2000-01-01], outflow}, {Date.add(~D[2000-01-01], days), inflow}]
+
+        case Finance.xirr(flows, precision: 10) do
+          # Near a total-loss rate (1 + r ≈ 0) discounting is numerically
+          # singular: tiny rounding in `r` blows up the discount factor. Skip
+          # those degenerate cases — they say nothing about the identity.
+          {:ok, rate} when 1 + rate > 0.01 ->
+            assert {:ok, value} = Finance.xnpv(rate, flows, precision: 10)
+            assert_in_delta value, 0.0, 1.0e-2 * (abs(inflow) + 1)
+
+          _ ->
+            :ok
+        end
+      end
+    end
+
     property "the NPV at the returned rate is ~zero" do
       check all(
               outflow <- integer(-1_000_000..-1),
@@ -219,13 +274,16 @@ defmodule FinanceTest do
             ) do
         flows = [{~D[2000-01-01], outflow}, {Date.add(~D[2000-01-01], days), inflow}]
 
-        case Finance.xirr(flows) do
-          {:ok, rate} ->
+        # A high-precision rate keeps rounding error negligible even where the
+        # discount factor is steep; the guard still skips the 1 + r ≈ 0
+        # singularity, where any rounding makes the factor explode.
+        case Finance.xirr(flows, precision: 10) do
+          {:ok, rate} when 1 + rate > 0.01 ->
             t = days / 365.0
             npv = outflow + inflow / :math.pow(1 + rate, t)
             assert_in_delta npv, 0.0, 1.0e-2 * (abs(inflow) + 1)
 
-          {:error, _} ->
+          _ ->
             :ok
         end
       end
