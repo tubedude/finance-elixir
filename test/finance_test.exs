@@ -673,6 +673,33 @@ defmodule FinanceTest do
       assert [%{period: 1} | _] = Finance.TVM.amortization_schedule!(0.10 / 12, 12, 1000)
       assert_raise ArgumentError, fn -> Finance.TVM.amortization_schedule!(0.05, 0, 1000) end
     end
+
+    test "computes in Decimal when given Decimal inputs" do
+      assert {:ok, rows} =
+               Finance.TVM.amortization_schedule(Decimal.new("0.05"), 3, Decimal.new("1000"))
+
+      assert length(rows) == 3
+      assert %Decimal{} = List.first(rows).payment
+      assert Decimal.equal?(List.last(rows).balance, 0)
+
+      total = Enum.reduce(rows, Decimal.new(0), fn r, acc -> Decimal.add(acc, r.principal) end)
+      assert Decimal.equal?(total, Decimal.new("-1000.00"))
+    end
+
+    test "the Decimal path accepts integer and float principals" do
+      assert {:ok, a} = Finance.TVM.amortization_schedule(Decimal.new("0.05"), 3, 1000)
+      assert {:ok, b} = Finance.TVM.amortization_schedule(Decimal.new("0.05"), 3, 1000.0)
+      assert Decimal.equal?(List.last(a).balance, 0)
+      assert Decimal.equal?(List.last(b).balance, 0)
+    end
+
+    test "the Decimal path handles a zero rate" do
+      assert {:ok, rows} =
+               Finance.TVM.amortization_schedule(Decimal.new("0"), 4, Decimal.new("1000"))
+
+      assert Enum.all?(rows, fn r -> Decimal.equal?(r.principal, Decimal.new("-250.00")) end)
+      assert Decimal.equal?(List.last(rows).balance, 0)
+    end
   end
 
   property "the principal portions repay the whole balance" do

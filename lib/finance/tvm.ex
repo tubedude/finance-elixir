@@ -11,19 +11,22 @@ defmodule Finance.TVM do
   money you receive is positive, money you pay out is negative.
   """
 
-  import Finance.Shared, only: [unwrap!: 1, options: 1, resolve_solver: 1, round_value: 2]
+  import Finance.Shared, only: [unwrap!: 1, options: 1, resolve_solver: 1]
 
   @type rate :: Finance.rate()
   @type option :: Finance.option()
   @type error :: Finance.error()
 
-  @typedoc "A row of an amortization schedule; monetary fields follow the `pmt/5` sign convention."
+  @typedoc """
+  A row of an amortization schedule; monetary fields follow the `pmt/5` sign
+  convention and are `Decimal` when the schedule is built from `Decimal` inputs.
+  """
   @type schedule_row :: %{
           period: pos_integer,
-          payment: float,
-          interest: float,
-          principal: float,
-          balance: float
+          payment: float | Decimal.t(),
+          interest: float | Decimal.t(),
+          principal: float | Decimal.t(),
+          balance: float | Decimal.t()
         }
 
   @schedule_options_schema NimbleOptions.new!(
@@ -211,47 +214,132 @@ defmodule Finance.TVM do
   Each monetary column is rounded to `:precision` places, which defaults to `2`
   (cents) rather than the `6` used elsewhere, since a schedule is a money table.
 
+  If `rate` or `pv` is a `Decimal`, the whole schedule is computed in `Decimal`
+  and every monetary field comes back as a `Decimal` — exact to the cent, which
+  matters when the rounding compounds over hundreds of periods.
+
       iex> {:ok, [first | _]} = Finance.TVM.amortization_schedule(0.10 / 12, 12, 1000)
       iex> {first.payment, first.interest, first.principal, first.balance}
       {-87.92, -8.33, -79.59, 920.41}
   """
-  @spec amortization_schedule(number, pos_integer, number, [{:precision, non_neg_integer}]) ::
-          {:ok, [schedule_row]} | {:error, error}
+  @spec amortization_schedule(
+          number | Decimal.t(),
+          pos_integer,
+          number | Decimal.t(),
+          [{:precision, non_neg_integer}]
+        ) :: {:ok, [schedule_row]} | {:error, error}
   def amortization_schedule(rate, nper, pv, opts \\ [])
-      when is_number(rate) and is_number(nper) and is_number(pv) and is_list(opts) do
+      when (is_number(rate) or is_struct(rate, Decimal)) and is_number(nper) and
+             (is_number(pv) or is_struct(pv, Decimal)) and is_list(opts) do
     n = trunc(nper)
 
     if nper == n and n >= 1 do
       opts = NimbleOptions.validate!(opts, @schedule_options_schema)
-      {:ok, build_schedule(rate, n, pv, opts)}
+      {:ok, build_schedule(rate, n, pv, Keyword.fetch!(opts, :precision))}
     else
       {:error, :undefined}
     end
   end
 
   @doc "Same as `amortization_schedule/4`, but returns the rows directly and raises `ArgumentError` on error."
-  @spec amortization_schedule!(number, pos_integer, number, [{:precision, non_neg_integer}]) ::
-          [schedule_row]
+  @spec amortization_schedule!(
+          number | Decimal.t(),
+          pos_integer,
+          number | Decimal.t(),
+          [{:precision, non_neg_integer}]
+        ) :: [schedule_row]
   def amortization_schedule!(rate, nper, pv, opts \\ []) do
     rate |> amortization_schedule(nper, pv, opts) |> unwrap!()
   end
 
-  defp build_schedule(rate, nper, pv, opts) do
+  defp build_schedule(rate, nper, pv, precision) do
+    if is_struct(rate, Decimal) or is_struct(pv, Decimal) do
+      build_decimal_schedule(to_decimal(rate), nper, to_decimal(pv), precision)
+    else
+      build_float_schedule(rate, nper, pv, precision)
+    end
+  end
+
+  defp build_float_schedule(rate, nper, pv, precision) do
     {:ok, payment} = pmt(rate, nper, pv)
-    payment = round_value(payment, opts)
+    payment = float_round(payment, precision)
 
+    schedule(1..nper, pv, fn period, balance ->
+      interest = float_round(-balance * rate, precision)
+      principal = float_principal(period, nper, balance, payment, interest, precision)
+      new_balance = float_round(balance + principal, precision)
+
+      row_payment =
+        if period == nper, do: float_round(interest + principal, precision), else: payment
+
+      {row_payment, interest, principal, new_balance}
+    end)
+  end
+
+  defp float_principal(nper, nper, balance, _payment, _interest, precision),
+    do: float_round(-balance, precision)
+
+  defp float_principal(_period, _nper, _payment, payment, interest, precision),
+    do: float_round(payment - interest, precision)
+
+  # `+ 0.0` collapses a floating-point negative zero to `0.0`.
+  defp float_round(value, precision), do: Float.round(value, precision) + 0.0
+
+  defp build_decimal_schedule(rate, nper, pv, precision) do
+    payment = rate |> decimal_pmt(nper, pv) |> decimal_round(precision)
+
+    schedule(1..nper, pv, fn period, balance ->
+      interest = Decimal.mult(balance, rate) |> Decimal.mult(-1) |> decimal_round(precision)
+      principal = decimal_principal(period, nper, balance, payment, interest, precision)
+      new_balance = Decimal.add(balance, principal) |> decimal_round(precision)
+
+      row_payment =
+        if period == nper,
+          do: Decimal.add(interest, principal) |> decimal_round(precision),
+          else: payment
+
+      {row_payment, interest, principal, new_balance}
+    end)
+  end
+
+  defp decimal_principal(nper, nper, balance, _payment, _interest, precision),
+    do: balance |> Decimal.mult(-1) |> decimal_round(precision)
+
+  defp decimal_principal(_period, _nper, _balance, payment, interest, precision),
+    do: Decimal.sub(payment, interest) |> decimal_round(precision)
+
+  # `pmt` for a plain loan (fv 0, ordinary annuity), in Decimal.
+  defp decimal_pmt(rate, nper, pv) do
+    if Decimal.equal?(rate, 0) do
+      Decimal.div(Decimal.mult(pv, -1), Decimal.new(nper))
+    else
+      growth = dec_pow(Decimal.add(1, rate), nper)
+      numerator = pv |> Decimal.mult(growth) |> Decimal.mult(rate) |> Decimal.mult(-1)
+      Decimal.div(numerator, Decimal.sub(growth, 1))
+    end
+  end
+
+  # (base)^n for a whole number n >= 1, by repeated multiplication (Decimal has no pow).
+  defp dec_pow(base, n) when n >= 1 do
+    Enum.reduce(1..n, Decimal.new(1), fn _, acc -> Decimal.mult(acc, base) end)
+  end
+
+  defp decimal_round(value, precision), do: Decimal.round(value, precision)
+
+  defp to_decimal(%Decimal{} = value), do: value
+  defp to_decimal(value) when is_integer(value), do: Decimal.new(value)
+  defp to_decimal(value) when is_float(value), do: Decimal.from_float(value)
+
+  # Walk the periods carrying a running balance; `fun` returns the four monetary
+  # fields for the row. Shared by the float and Decimal builders.
+  defp schedule(periods, opening_balance, fun) do
     {rows, _balance} =
-      Enum.map_reduce(1..nper, pv, fn period, balance ->
-        interest = round_value(-balance * rate, opts)
-        principal = schedule_principal(period, nper, balance, payment, interest, opts)
-        new_balance = round_value(balance + principal, opts)
-
-        row_payment =
-          if period == nper, do: round_value(interest + principal, opts), else: payment
+      Enum.map_reduce(periods, opening_balance, fn period, balance ->
+        {payment, interest, principal, new_balance} = fun.(period, balance)
 
         row = %{
           period: period,
-          payment: row_payment,
+          payment: payment,
           interest: interest,
           principal: principal,
           balance: new_balance
@@ -262,14 +350,6 @@ defmodule Finance.TVM do
 
     rows
   end
-
-  # The last row pays off whatever balance remains; earlier rows pay the
-  # difference between the level payment and that period's interest.
-  defp schedule_principal(nper, nper, balance, _payment, _interest, opts),
-    do: round_value(-balance, opts)
-
-  defp schedule_principal(_period, _nper, _balance, payment, interest, opts),
-    do: round_value(payment - interest, opts)
 
   @doc """
   Works out how many periods it takes for payments of `pmt` to pay off a present

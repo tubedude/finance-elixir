@@ -7,7 +7,8 @@
   given period's payment; together they add up to `pmt/5`.
 - `Finance.TVM.amortization_schedule/3,4` — the full repayment schedule as a list
   of `%{period, payment, interest, principal, balance}` rows, with the final row
-  absorbing rounding so the balance ends at exactly `0.0`.
+  absorbing rounding so the balance ends at exactly `0.0`. Given `Decimal` inputs
+  it computes in `Decimal` and returns `Decimal` rows, exact to the cent.
 - `Finance.Rates` — `effective_annual_rate/2`, `nominal_rate/2`, and
   `continuous_to_periodic/2` for converting between rate quotations.
 
