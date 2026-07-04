@@ -208,6 +208,24 @@ defmodule FinanceTest do
     test "empty input" do
       assert Finance.xirr([]) == {:error, :insufficient_data}
     end
+
+    test "an invalid date is reported" do
+      flows = [{{2019, 13, 1}, -100}, {{2019, 1, 1}, 100}]
+      assert Finance.xirr(flows) == {:error, :invalid_date}
+    end
+  end
+
+  describe "solver bisection fallback" do
+    # `max_iterations: 1` starves Newton so it bails to the bisection fallback.
+    test "returns a value when a root is bracketed" do
+      assert {:ok, _rate} = Finance.irr([-1000, 500, 500, 300], max_iterations: 1)
+    end
+
+    test "diverges when no root can be bracketed" do
+      # An all-positive series has no rate; bisection expands its bracket, then gives up.
+      assert Finance.rate(10, 100, 1000, 0.0, 0, max_iterations: 1) ==
+               {:error, :did_not_converge}
+    end
   end
 
   describe "xnpv/2" do
@@ -318,6 +336,86 @@ defmodule FinanceTest do
 
       assert Finance.mirr([Decimal.new("-100"), Decimal.new("50"), Decimal.new("80")], 0.1, 0.1) ==
                Finance.mirr([-100, 50, 80], 0.1, 0.1)
+    end
+  end
+
+  describe "TVM scalars" do
+    test "fv, pv, pmt, nper are mutually consistent" do
+      # A payment that pays off pv over nper periods should give fv ~ 0.
+      assert {:ok, payment} = Finance.pmt(0.10, 10, 1000)
+      assert_in_delta payment, -162.745395, 1.0e-6
+      assert {:ok, future} = Finance.fv(0.10, 10, payment, 1000)
+      assert_in_delta future, 0.0, 1.0e-4
+    end
+
+    test "pv inverts fv" do
+      assert {:ok, future} = Finance.fv(0.08, 5, 0, -1000)
+      assert {:ok, present} = Finance.pv(0.08, 5, 0, future)
+      assert_in_delta present, -1000.0, 1.0e-6
+    end
+
+    test "nper inverts pmt" do
+      assert {:ok, payment} = Finance.pmt(0.05, 12, 1000)
+      assert {:ok, periods} = Finance.nper(0.05, payment, 1000)
+      assert_in_delta periods, 12.0, 1.0e-6
+    end
+
+    test "rate inverts pmt (reuses the irr solver)" do
+      assert {:ok, payment} = Finance.pmt(0.03, 24, 5000)
+      assert Finance.rate(24, payment, 5000) == {:ok, 0.03}
+    end
+
+    test "zero-rate branches" do
+      assert Finance.fv(0.0, 10, -100, 0) == {:ok, 1000.0}
+      assert Finance.pv(0.0, 10, -100, 0) == {:ok, 1000.0}
+      assert Finance.pmt(0.0, 10, 1000) == {:ok, -100.0}
+      assert Finance.nper(0.0, -100, 1000) == {:ok, 10.0}
+    end
+
+    test "type: 1 (annuity due) differs from ordinary" do
+      assert {:ok, ordinary} = Finance.fv(0.05, 10, -100, 0, 0)
+      assert {:ok, due} = Finance.fv(0.05, 10, -100, 0, 1)
+      # Paying at the start of each period earns one extra period of interest.
+      assert_in_delta due, ordinary * 1.05, 1.0e-6
+    end
+
+    test "undefined and non-convergent cases" do
+      assert Finance.pmt(0.05, 0, 1000) == {:error, :undefined}
+      assert Finance.nper(0.0, 0, 1000) == {:error, :undefined}
+      assert Finance.rate(10.5, -100, 1000) == {:error, :undefined}
+    end
+
+    test "bang variants return bare values and raise" do
+      assert Finance.fv!(0.0, 10, -100, 0) == 1000.0
+      assert Finance.pv!(0.0, 10, -100, 0) == 1000.0
+      assert Finance.pmt!(0.0, 10, 1000) == -100.0
+      assert Finance.nper!(0.0, -100, 1000) == 10.0
+      assert Finance.rate!(10, -100, 1000) == 0.0
+      assert_raise ArgumentError, fn -> Finance.pmt!(0.05, 0, 1000) end
+      assert_raise ArgumentError, fn -> Finance.rate!(10, 100, 1000) end
+    end
+
+    test "rate with a single-signed series cannot converge" do
+      assert Finance.rate(10, 100, 1000) == {:error, :did_not_converge}
+    end
+
+    test "nper is undefined when 1 + rate <= 0" do
+      assert Finance.nper(-1.5, -100, 1000) == {:error, :undefined}
+    end
+
+    test "nper is undefined when the payment exactly services the balance" do
+      # pmt/rate cancels pv, so the log argument's denominator is zero.
+      assert Finance.nper(0.05, -50, 1000) == {:error, :undefined}
+    end
+
+    test "rate handles annuity-due (type: 1)" do
+      assert {:ok, _rate} = Finance.rate(10, -100, 1000, 0.0, 1)
+    end
+
+    test "invalid options still raise through rate/6" do
+      assert_raise NimbleOptions.ValidationError, fn ->
+        Finance.rate(10, -100, 1000, 0.0, 0, precision: -1)
+      end
     end
   end
 

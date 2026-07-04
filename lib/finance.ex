@@ -32,6 +32,8 @@ defmodule Finance do
       `XIRR`/`XNPV` convention.
     * **Periodic** — `irr/1`, `npv/2`, and `mirr/3` take a bare list of amounts
       at equally spaced periods `0, 1, 2, …`.
+    * **Time-value-of-money** — `fv/5`, `pv/5`, `pmt/5`, `nper/5`, and `rate/6`
+      each solve the annuity equation for one unknown.
 
   The flagship is XIRR, the rate `r` that zeroes the net present value of dated
   flows:
@@ -52,9 +54,8 @@ defmodule Finance do
   Dated flows may be `{date, amount}` pairs or two parallel lists; dates may be
   `Date` structs or Erlang-style `{year, month, day}` tuples. Amounts may be any
   number (integer minor units such as cents, or floats) or a `Decimal` when that
-  optional dependency is installed — results are always floats. The only required
-  dependency is the tiny `nimble_options` (option validation and docs); `Decimal`
-  is optional.
+  optional dependency is installed — results are always floats. Options are
+  validated with `nimble_options`; `Decimal` support is optional.
 
   ## Options
 
@@ -88,6 +89,7 @@ defmodule Finance do
           | :single_signed_flow
           | :invalid_date
           | :did_not_converge
+          | :undefined
 
   @days_in_year 365.0
 
@@ -315,6 +317,174 @@ defmodule Finance do
       end)
 
     :math.pow(future_of_inflows / -present_of_outflows, 1 / periods) - 1
+  end
+
+  # === TVM — time-value-of-money scalars ===================================
+  #
+  # These solve the standard annuity equation for one unknown:
+  #
+  #     pv·(1+r)^n + pmt·(1 + r·type)·((1+r)^n − 1)/r + fv = 0
+  #
+  # `type` is 0 for payments at the end of each period (ordinary annuity) or 1
+  # for the beginning (annuity due). Sign convention follows spreadsheets: money
+  # you receive is positive, money you pay out is negative.
+
+  @doc """
+  Future value of an investment with present value `pv` and fixed payment `pmt`
+  per period, after `nper` periods at interest `rate`.
+
+      iex> {:ok, value} = Finance.fv(0.05, 10, -100, -1000)
+      iex> Float.round(value, 2)
+      2886.68
+  """
+  @spec fv(number, number, number, number, 0 | 1) :: {:ok, float} | {:error, error}
+  def fv(rate, nper, pmt, pv \\ 0.0, type \\ 0)
+      when is_number(rate) and is_number(nper) and is_number(pmt) and is_number(pv) and
+             type in [0, 1] do
+    value =
+      if rate == 0,
+        do: -(pv + pmt * nper),
+        else: -(pv * :math.pow(1 + rate, nper) + pmt * annuity(rate, nper, type))
+
+    {:ok, value * 1.0}
+  end
+
+  @doc "Like `fv/5`, but returns the value directly and raises `ArgumentError` on error."
+  @spec fv!(number, number, number, number, 0 | 1) :: float
+  def fv!(rate, nper, pmt, pv \\ 0.0, type \\ 0), do: rate |> fv(nper, pmt, pv, type) |> unwrap!()
+
+  @doc """
+  Present value of an investment that pays `pmt` per period for `nper` periods
+  and a lump sum `fv` at the end, discounted at `rate`.
+
+      iex> {:ok, value} = Finance.pv(0.05, 10, -100, -1000)
+      iex> Float.round(value, 2)
+      1386.09
+  """
+  @spec pv(number, number, number, number, 0 | 1) :: {:ok, float} | {:error, error}
+  def pv(rate, nper, pmt, fv \\ 0.0, type \\ 0)
+      when is_number(rate) and is_number(nper) and is_number(pmt) and is_number(fv) and
+             type in [0, 1] do
+    value =
+      if rate == 0,
+        do: -(fv + pmt * nper),
+        else: -(fv + pmt * annuity(rate, nper, type)) / :math.pow(1 + rate, nper)
+
+    {:ok, value * 1.0}
+  end
+
+  @doc "Like `pv/5`, but returns the value directly and raises `ArgumentError` on error."
+  @spec pv!(number, number, number, number, 0 | 1) :: float
+  def pv!(rate, nper, pmt, fv \\ 0.0, type \\ 0), do: rate |> pv(nper, pmt, fv, type) |> unwrap!()
+
+  @doc """
+  Payment per period that pays off present value `pv` (and reaches future value
+  `fv`) over `nper` periods at `rate`.
+
+      iex> {:ok, payment} = Finance.pmt(0.10, 10, 1000)
+      iex> Float.round(payment, 2)
+      -162.75
+  """
+  @spec pmt(number, number, number, number, 0 | 1) :: {:ok, float} | {:error, error}
+  def pmt(rate, nper, pv, fv \\ 0.0, type \\ 0)
+      when is_number(rate) and is_number(nper) and is_number(pv) and is_number(fv) and
+             type in [0, 1] do
+    cond do
+      nper == 0 -> {:error, :undefined}
+      rate == 0 -> {:ok, -(pv + fv) / nper * 1.0}
+      true -> {:ok, -(pv * :math.pow(1 + rate, nper) + fv) / annuity(rate, nper, type) * 1.0}
+    end
+  end
+
+  @doc "Like `pmt/5`, but returns the value directly and raises `ArgumentError` on error."
+  @spec pmt!(number, number, number, number, 0 | 1) :: float
+  def pmt!(rate, nper, pv, fv \\ 0.0, type \\ 0), do: rate |> pmt(nper, pv, fv, type) |> unwrap!()
+
+  @doc """
+  Number of periods needed for payments of `pmt` to pay off present value `pv`
+  (reaching future value `fv`) at `rate`.
+
+  Returns `{:error, :undefined}` when no such number of periods exists.
+
+      iex> {:ok, periods} = Finance.nper(0.05, -100, 1000)
+      iex> Float.round(periods, 2)
+      14.21
+  """
+  @spec nper(number, number, number, number, 0 | 1) :: {:ok, float} | {:error, error}
+  def nper(rate, pmt, pv, fv \\ 0.0, type \\ 0)
+      when is_number(rate) and is_number(pmt) and is_number(pv) and is_number(fv) and
+             type in [0, 1] do
+    nper_periods(rate, pmt, pv, fv, type)
+  end
+
+  defp nper_periods(rate, pmt, pv, fv, type) do
+    cond do
+      rate == 0 and pmt == 0 -> {:error, :undefined}
+      rate == 0 -> {:ok, -(pv + fv) / pmt * 1.0}
+      1 + rate <= 0 -> {:error, :undefined}
+      true -> nper_with_rate(rate, pmt, pv, fv, type)
+    end
+  end
+
+  @doc "Like `nper/5`, but returns the value directly and raises `ArgumentError` on error."
+  @spec nper!(number, number, number, number, 0 | 1) :: float
+  def nper!(rate, pmt, pv, fv \\ 0.0, type \\ 0), do: rate |> nper(pmt, pv, fv, type) |> unwrap!()
+
+  @doc """
+  Interest rate per period of an annuity: `nper` payments of `pmt`, a present
+  value `pv`, and a future value `fv`. `nper` must be a whole number of periods.
+
+  Solved iteratively (reusing the `irr` solver), so it accepts the same options
+  as `xirr/2` and returns `{:error, :did_not_converge}` if no rate is found.
+
+      iex> Finance.rate(10, -100, 1000)
+      {:ok, 0.0}
+  """
+  @spec rate(number, number, number, number, 0 | 1, [option]) :: {:ok, rate} | {:error, error}
+  def rate(nper, pmt, pv, fv \\ 0.0, type \\ 0, opts \\ [])
+      when is_number(nper) and is_number(pmt) and is_number(pv) and is_number(fv) and
+             type in [0, 1] and is_list(opts) do
+    n = trunc(nper)
+
+    if nper == n and n > 0 do
+      solve(tvm_flows(n, pmt, pv, fv, type), options(opts))
+    else
+      {:error, :undefined}
+    end
+  end
+
+  @doc "Like `rate/6`, but returns the rate directly and raises `ArgumentError` on error."
+  @spec rate!(number, number, number, number, 0 | 1, [option]) :: rate
+  def rate!(nper, pmt, pv, fv \\ 0.0, type \\ 0, opts \\ []) do
+    nper |> rate(pmt, pv, fv, type, opts) |> unwrap!()
+  end
+
+  # (1 + r·type) · ((1+r)^n − 1) / r — the annuity factor that multiplies pmt.
+  defp annuity(rate, nper, type) do
+    (1 + rate * type) * (:math.pow(1 + rate, nper) - 1) / rate
+  end
+
+  defp nper_with_rate(rate, pmt, pv, fv, type) do
+    k = pmt * (1 + rate * type) / rate
+    denom = pv + k
+
+    cond do
+      denom == 0 -> {:error, :undefined}
+      (k - fv) / denom <= 0 -> {:error, :undefined}
+      true -> {:ok, :math.log((k - fv) / denom) / :math.log(1 + rate)}
+    end
+  end
+
+  # Represent a TVM problem as a cash-flow series so `rate` can reuse the solver:
+  # `pv` at period 0, `pmt` each period, `fv` at the last period.
+  defp tvm_flows(nper, pmt, pv, fv, type) do
+    payment_periods = if type == 1, do: 0..(nper - 1), else: 1..nper
+
+    payment_periods
+    |> Enum.reduce(%{}, fn i, acc -> Map.update(acc, i * 1.0, pmt * 1.0, &(&1 + pmt)) end)
+    |> Map.update(0.0, pv * 1.0, &(&1 + pv))
+    |> Map.update(nper * 1.0, fv * 1.0, &(&1 + fv))
+    |> Map.to_list()
   end
 
   # === Dispatch & shared helpers ===========================================
