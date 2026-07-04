@@ -11,11 +11,28 @@ defmodule Finance.TVM do
   money you receive is positive, money you pay out is negative.
   """
 
-  import Finance.Shared, only: [unwrap!: 1, options: 1, resolve_solver: 1]
+  import Finance.Shared, only: [unwrap!: 1, options: 1, resolve_solver: 1, round_value: 2]
 
   @type rate :: Finance.rate()
   @type option :: Finance.option()
   @type error :: Finance.error()
+
+  @typedoc "A row of an amortization schedule; monetary fields follow the `pmt/5` sign convention."
+  @type schedule_row :: %{
+          period: pos_integer,
+          payment: float,
+          interest: float,
+          principal: float,
+          balance: float
+        }
+
+  @schedule_options_schema NimbleOptions.new!(
+                             precision: [
+                               type: :non_neg_integer,
+                               default: 2,
+                               doc: "decimal places each monetary column is rounded to"
+                             ]
+                           )
 
   @doc """
   Works out the future value of an investment: what it grows to after `nper`
@@ -105,6 +122,154 @@ defmodule Finance.TVM do
   @doc "Same as `pmt/5`, but hands back the value on its own and raises `ArgumentError` if the calculation fails."
   @spec pmt!(number, number, number, number, 0 | 1) :: float
   def pmt!(rate, nper, pv, fv \\ 0.0, type \\ 0), do: rate |> pmt(nper, pv, fv, type) |> unwrap!()
+
+  @doc """
+  Works out the interest portion of the payment in period `per` — how much of
+  that period's fixed payment goes to interest rather than to principal.
+
+  `per` counts from 1 and must fall within `1..nper`. It pairs with `ppmt/6`,
+  which gives the principal portion; for every period the two add up to `pmt/5`.
+
+      iex> {:ok, interest} = Finance.TVM.ipmt(0.10 / 12, 1, 12, 1000)
+      iex> Float.round(interest, 6)
+      -8.333333
+  """
+  @spec ipmt(number, number, number, number, number, 0 | 1) :: {:ok, float} | {:error, error}
+  def ipmt(rate, per, nper, pv, fv \\ 0.0, type \\ 0)
+      when is_number(rate) and is_number(per) and is_number(nper) and is_number(pv) and
+             is_number(fv) and type in [0, 1] do
+    with {:ok, {interest, _principal}} <- split_payment(rate, per, nper, pv, fv, type) do
+      {:ok, interest}
+    end
+  end
+
+  @doc "Same as `ipmt/6`, but hands back the value on its own and raises `ArgumentError` if the calculation fails."
+  @spec ipmt!(number, number, number, number, number, 0 | 1) :: float
+  def ipmt!(rate, per, nper, pv, fv \\ 0.0, type \\ 0) do
+    rate |> ipmt(per, nper, pv, fv, type) |> unwrap!()
+  end
+
+  @doc """
+  Works out the principal portion of the payment in period `per` — how much of
+  that period's fixed payment actually pays down the balance.
+
+  `per` counts from 1 and must fall within `1..nper`. It is the companion of
+  `ipmt/6`; `ipmt` plus `ppmt` equals `pmt/5` for every period.
+
+      iex> {:ok, principal} = Finance.TVM.ppmt(0.10 / 12, 1, 12, 1000)
+      iex> Float.round(principal, 6)
+      -79.582554
+  """
+  @spec ppmt(number, number, number, number, number, 0 | 1) :: {:ok, float} | {:error, error}
+  def ppmt(rate, per, nper, pv, fv \\ 0.0, type \\ 0)
+      when is_number(rate) and is_number(per) and is_number(nper) and is_number(pv) and
+             is_number(fv) and type in [0, 1] do
+    with {:ok, {_interest, principal}} <- split_payment(rate, per, nper, pv, fv, type) do
+      {:ok, principal}
+    end
+  end
+
+  @doc "Same as `ppmt/6`, but hands back the value on its own and raises `ArgumentError` if the calculation fails."
+  @spec ppmt!(number, number, number, number, number, 0 | 1) :: float
+  def ppmt!(rate, per, nper, pv, fv \\ 0.0, type \\ 0) do
+    rate |> ppmt(per, nper, pv, fv, type) |> unwrap!()
+  end
+
+  # Split period `per`'s level payment into {interest, principal}, reusing pmt/fv.
+  # `per` must be a whole number within 1..nper.
+  defp split_payment(rate, per, nper, pv, fv, type) do
+    n = trunc(per)
+
+    if per == n and n >= 1 and n <= nper do
+      with {:ok, payment} <- pmt(rate, nper, pv, fv, type) do
+        {:ok, balance} = fv(rate, n - 1, payment, pv, type)
+        interest = annuity_due_adjust(balance * rate, rate, n, type)
+        # `+ 0.0` collapses a floating-point negative zero to `0.0`.
+        {:ok, {interest + 0.0, payment - interest + 0.0}}
+      end
+    else
+      {:error, :undefined}
+    end
+  end
+
+  # For an annuity due (type 1), the first period carries no interest and later
+  # periods discount one step; an ordinary annuity (type 0) is left as-is.
+  defp annuity_due_adjust(_interest, _rate, 1, 1), do: 0.0
+  defp annuity_due_adjust(interest, rate, _per, 1), do: interest / (1 + rate)
+  defp annuity_due_adjust(interest, _rate, _per, 0), do: interest
+
+  @doc """
+  Builds the full amortization schedule for a loan of `pv` repaid with a level
+  payment over `nper` periods at `rate`.
+
+  Returns `{:ok, rows}` where each row is a map of `period`, `payment`,
+  `interest`, `principal`, and remaining `balance`. Money follows the `pmt/5`
+  sign convention (a loan is a positive `pv`, its payments are negative), and the
+  `balance` runs from `pv` down to exactly `0.0` — the final row absorbs any
+  rounding residual so the loan pays off cleanly.
+
+  Each monetary column is rounded to `:precision` places, which defaults to `2`
+  (cents) rather than the `6` used elsewhere, since a schedule is a money table.
+
+      iex> {:ok, [first | _]} = Finance.TVM.amortization_schedule(0.10 / 12, 12, 1000)
+      iex> {first.payment, first.interest, first.principal, first.balance}
+      {-87.92, -8.33, -79.59, 920.41}
+  """
+  @spec amortization_schedule(number, pos_integer, number, [{:precision, non_neg_integer}]) ::
+          {:ok, [schedule_row]} | {:error, error}
+  def amortization_schedule(rate, nper, pv, opts \\ [])
+      when is_number(rate) and is_number(nper) and is_number(pv) and is_list(opts) do
+    n = trunc(nper)
+
+    if nper == n and n >= 1 do
+      opts = NimbleOptions.validate!(opts, @schedule_options_schema)
+      {:ok, build_schedule(rate, n, pv, opts)}
+    else
+      {:error, :undefined}
+    end
+  end
+
+  @doc "Same as `amortization_schedule/4`, but returns the rows directly and raises `ArgumentError` on error."
+  @spec amortization_schedule!(number, pos_integer, number, [{:precision, non_neg_integer}]) ::
+          [schedule_row]
+  def amortization_schedule!(rate, nper, pv, opts \\ []) do
+    rate |> amortization_schedule(nper, pv, opts) |> unwrap!()
+  end
+
+  defp build_schedule(rate, nper, pv, opts) do
+    {:ok, payment} = pmt(rate, nper, pv)
+    payment = round_value(payment, opts)
+
+    {rows, _balance} =
+      Enum.map_reduce(1..nper, pv, fn period, balance ->
+        interest = round_value(-balance * rate, opts)
+        principal = schedule_principal(period, nper, balance, payment, interest, opts)
+        new_balance = round_value(balance + principal, opts)
+
+        row_payment =
+          if period == nper, do: round_value(interest + principal, opts), else: payment
+
+        row = %{
+          period: period,
+          payment: row_payment,
+          interest: interest,
+          principal: principal,
+          balance: new_balance
+        }
+
+        {row, new_balance}
+      end)
+
+    rows
+  end
+
+  # The last row pays off whatever balance remains; earlier rows pay the
+  # difference between the level payment and that period's interest.
+  defp schedule_principal(nper, nper, balance, _payment, _interest, opts),
+    do: round_value(-balance, opts)
+
+  defp schedule_principal(_period, _nper, _balance, payment, interest, opts),
+    do: round_value(payment - interest, opts)
 
   @doc """
   Works out how many periods it takes for payments of `pmt` to pay off a present

@@ -12,7 +12,10 @@ The functions are organised into domain modules:
 
 - `Finance.CashFlow` — net present value and internal rate of return
   (`npv`, `xnpv`, `irr`, `xirr`, `mirr`).
-- `Finance.TVM` — time-value-of-money scalars (`pv`, `fv`, `pmt`, `nper`, `rate`).
+- `Finance.TVM` — time-value-of-money scalars (`pv`, `fv`, `pmt`, `ipmt`, `ppmt`,
+  `nper`, `rate`) plus `amortization_schedule`.
+- `Finance.Rates` — rate conversions (`effective_annual_rate`, `nominal_rate`,
+  `continuous_to_periodic`).
 - `Finance.Depreciation` — `sln`, `syd`, `ddb`, `db`.
 - `Finance.Returns` — performance and risk metrics (`volatility`).
 - `Finance.Solver` — the root-finding strategy behind the rate functions,
