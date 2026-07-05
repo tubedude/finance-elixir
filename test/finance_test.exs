@@ -405,6 +405,261 @@ defmodule FinanceTest do
     end
   end
 
+  # Cash flows drawn from closed issues on numpy-financial (Python) and java-xirr
+  # (Java), where those libraries returned a wrong rate, raised, or failed to
+  # converge. finance-elixir resolves each; pinned so a solver change can't regress.
+  describe "numpy-financial (Python) issue corpus" do
+    test "a negative final flow past the ninth doesn't wreck the result (#44)" do
+      # numpy's polynomial-roots IRR returned -0.9997 here (essentially total loss);
+      # the real root is a ~100% return, which the bracket solver finds.
+      series = [-1678.87, 771.96, 1814.05, 3520.30, 3552.95, 3584.99, 4789.91, -1]
+      assert {:ok, rate} = Finance.CashFlow.irr(series)
+      assert_periodic_root(rate, series)
+      assert_in_delta rate, 1.004270, 1.0e-5
+    end
+
+    test "an outlay in the second period is still solved (#46)" do
+      # numpy returned 7533% for this money-losing series; the genuine root is ~-56%.
+      series = [2113.73, -161_445.03, 7626.73, 8619.84, 8612.92]
+      assert {:ok, rate} = Finance.CashFlow.irr(series)
+      assert_periodic_root(rate, series)
+      assert_in_delta rate, -0.557331, 1.0e-5
+    end
+
+    test "a series with multiple roots returns a genuine one (#98)" do
+      series = [-10_000 | List.duplicate(327.24625, 16)]
+      assert {:ok, rate} = Finance.CashFlow.irr(series, precision: 10)
+      assert_periodic_root(rate, series)
+    end
+
+    test "vanishing flows that made numpy raise LinAlgError simply don't converge (#15)" do
+      # -3000 then flows decaying to ~1e-313. The only rate that zeroes the NPV sits
+      # below -99.9999% — past the representable floor — so the honest answer is
+      # :did_not_converge rather than numpy's "Array must not contain infs or NaNs".
+      series = [
+        -3000.0,
+        2.3926932267015667e-07,
+        4.1672087103345505e-16,
+        5.3965110036378706e-25,
+        5.1962551071806174e-34,
+        3.7202955645436402e-43,
+        1.9804961711632469e-52,
+        7.8393517651814181e-62,
+        2.3072565113911438e-71,
+        5.0491839233308912e-81,
+        8.2159177668499263e-91,
+        9.9403244366963527e-101,
+        8.942410813633967e-111,
+        5.9816122646481191e-121,
+        2.9750309031844241e-131,
+        1.1002067043497954e-141,
+        3.0252876563518021e-152,
+        6.1854121948207909e-163,
+        9.4032980015353301e-174,
+        1.0629218520017728e-184,
+        8.9337141847171845e-196,
+        5.5830607698467935e-207,
+        2.5943122036622652e-218,
+        8.9635842466507006e-230,
+        2.3027710094332358e-241,
+        4.3987510596745562e-253,
+        6.2476630372575209e-265,
+        6.598046841695288e-277,
+        5.1811095266842017e-289,
+        3.0250999925830644e-301,
+        1.3133070599585015e-313
+      ]
+
+      assert Finance.CashFlow.irr(series) == {:error, :did_not_converge}
+    end
+  end
+
+  describe "java-xirr (Java) issue corpus" do
+    test "an overflowing 31-flow series matches Google Sheets (#17)" do
+      # java-xirr overflowed; Sheets/LibreOffice give -0.809918434570599.
+      flows = [
+        {{2020, 1, 31}, 2_821_703.69},
+        {{2020, 3, 6}, 12_554.96},
+        {{2020, 3, 6}, -12_554.96},
+        {{2020, 3, 27}, -24_208.19},
+        {{2020, 3, 27}, -437_308.92},
+        {{2020, 3, 27}, -2_598.07},
+        {{2020, 3, 27}, -93_054.6},
+        {{2020, 3, 27}, -26_665.85},
+        {{2020, 3, 27}, -14_531.04},
+        {{2020, 4, 1}, -9_807.79},
+        {{2020, 4, 1}, -97_605},
+        {{2020, 4, 1}, -21_304.64},
+        {{2020, 4, 1}, -89_577.85},
+        {{2020, 4, 1}, -12_191.24},
+        {{2020, 4, 1}, -7_176.47},
+        {{2020, 4, 1}, -11_337.45},
+        {{2020, 4, 1}, -12_917.64},
+        {{2020, 4, 1}, -11_530.63},
+        {{2020, 4, 1}, -34_625.18},
+        {{2020, 4, 1}, -6_485.98},
+        {{2020, 4, 1}, -21_439.77},
+        {{2020, 4, 3}, -442.35},
+        {{2020, 5, 4}, 186.98},
+        {{2020, 5, 4}, -5_843.2},
+        {{2020, 6, 3}, -3_195.16},
+        {{2020, 6, 3}, -780_315.21},
+        {{2020, 6, 8}, 3_225.17},
+        {{2020, 6, 8}, -759_649.19},
+        {{2020, 6, 8}, -3_225.17},
+        {{2020, 6, 8}, 759_649.19},
+        {{2020, 6, 18}, -116_794.53}
+      ]
+
+      assert Finance.CashFlow.xirr(flows, precision: 8) == {:ok, -0.80991843}
+    end
+
+    test "a series java-xirr couldn't converge matches Excel (#14)" do
+      # Excel gives -0.724636607244611.
+      flows = [
+        {{2018, 8, 30}, -1_498_500},
+        {{2018, 8, 30}, -1_500},
+        {{2019, 1, 10}, -499_500},
+        {{2019, 1, 10}, -500},
+        {{2019, 3, 7}, -499_500},
+        {{2019, 3, 7}, -500},
+        {{2019, 3, 19}, -44_955_000},
+        {{2019, 3, 19}, -45_000},
+        {{2019, 3, 31}, 44_630_158.4897253},
+        {{2019, 3, 31}, 44_674.8333230484}
+      ]
+
+      assert Finance.CashFlow.xirr(flows, precision: 8) == {:ok, -0.72463661}
+    end
+
+    test "the reporter's expected 18.84% is recovered (#12)" do
+      flows = [
+        {{2019, 10, 25}, 984_290.64},
+        {{2020, 10, 25}, -156_452.14},
+        {{2021, 10, 25}, -156_000.00},
+        {{2022, 10, 25}, -156_000.00},
+        {{2023, 10, 25}, -319_306.62},
+        {{2024, 10, 25}, -319_306.62},
+        {{2025, 10, 25}, -319_306.62},
+        {{2026, 10, 25}, -319_306.62},
+        {{2027, 10, 25}, -582_400.00}
+      ]
+
+      assert Finance.CashFlow.xirr(flows, precision: 4) == {:ok, 0.1884}
+    end
+
+    test "a deeply negative yield java-xirr rejected is found (#5)" do
+      # java-xirr threw once the yield fell below about -0.64; the root here is ~-76%.
+      flows = [
+        {{2001, 6, 22}, -2610},
+        {{2001, 7, 3}, -2589},
+        {{2001, 7, 5}, -5110},
+        {{2001, 7, 6}, -2550},
+        {{2001, 7, 9}, -5086},
+        {{2001, 7, 10}, -2561},
+        {{2001, 7, 12}, -5040},
+        {{2001, 7, 13}, -2552},
+        {{2001, 7, 16}, -2530},
+        {{2001, 7, 17}, 29_520}
+      ]
+
+      assert {:ok, rate} = Finance.CashFlow.xirr(flows, precision: 10)
+      assert_dated_root(rate, flows)
+      assert rate < -0.64
+    end
+
+    test "the zero-derivative series resolves near total loss (#7)" do
+      # A long run of small outflows then one large inflow drove java-xirr's Newton to
+      # a zero derivative; the bracket solver lands on a near--100% rate.
+      flows = [
+        {{2019, 3, 14}, -4.625},
+        {{2019, 3, 15}, -4.375},
+        {{2019, 3, 18}, -3.975},
+        {{2019, 3, 19}, -4.350},
+        {{2019, 3, 20}, -4.725},
+        {{2019, 3, 22}, -5.050},
+        {{2019, 3, 25}, -5.000},
+        {{2019, 3, 26}, -4.750},
+        {{2019, 4, 2}, -3.800},
+        {{2019, 4, 3}, -3.650},
+        {{2019, 4, 4}, -3.500},
+        {{2019, 4, 5}, -3.350},
+        {{2019, 4, 8}, -3.200},
+        {{2019, 4, 9}, -3.050},
+        {{2019, 4, 10}, -2.900},
+        {{2019, 4, 11}, -2.800},
+        {{2019, 4, 12}, -2.700},
+        {{2019, 4, 15}, -2.600},
+        {{2019, 4, 16}, 45.000}
+      ]
+
+      assert {:ok, rate} = Finance.CashFlow.xirr(flows, precision: 10)
+      assert_dated_root(rate, flows)
+    end
+
+    test "a high-value PE fund schedule java-xirr couldn't converge is solved (#10)" do
+      flows = [
+        {{2019, 12, 1}, -516_250_000},
+        {{2019, 12, 31}, 6_676_867.348},
+        {{2020, 3, 31}, -23_985_279.65},
+        {{2020, 6, 30}, -9_226_199.498},
+        {{2020, 9, 30}, -4_756_239.031},
+        {{2020, 12, 31}, 9_424_601.751},
+        {{2021, 3, 31}, 13_316_322.85},
+        {{2021, 6, 30}, 42_283_061.51},
+        {{2021, 9, 30}, 48_107_917.48},
+        {{2021, 12, 31}, 73_370_583.37},
+        {{2022, 3, 31}, 78_071_059.19},
+        {{2022, 6, 30}, 88_001_127.23},
+        {{2022, 9, 30}, 93_155_837.61},
+        {{2022, 12, 31}, 98_048_409.57},
+        {{2023, 3, 31}, 102_678_843.1},
+        {{2023, 6, 30}, 91_850_303.81},
+        {{2023, 9, 30}, 36_640_855.3}
+      ]
+
+      assert {:ok, rate} = Finance.CashFlow.xirr(flows, precision: 10)
+      assert_dated_root(rate, flows)
+    end
+
+    test "magnitudes up to 1e9 that overflowed java-xirr still resolve (#16)" do
+      flows = [
+        {{2017, 1, 6}, -1_750_000.00},
+        {{2017, 1, 6}, -2_500_000.00},
+        {{2017, 1, 9}, -5_625_000_000.00},
+        {{2017, 1, 18}, -1_000_000.00},
+        {{2017, 11, 20}, 228_159_246.58},
+        {{2017, 12, 22}, 119_665.77},
+        {{2017, 12, 22}, 170_951.11},
+        {{2018, 1, 8}, -1_750_000.00},
+        {{2019, 1, 30}, 281_250_000.00},
+        {{2019, 3, 12}, 680_010.61},
+        {{2019, 3, 12}, 952_014.86},
+        {{2019, 11, 20}, 355_381.27},
+        {{2019, 11, 20}, 281_250_000.00},
+        {{2019, 11, 20}, 497_533.00},
+        {{2020, 3, 31}, 15_667_873.77}
+      ]
+
+      assert {:ok, rate} = Finance.CashFlow.xirr(flows, precision: 10)
+      assert_dated_root(rate, flows)
+    end
+  end
+
+  # A rate is a genuine root when the NPV there is negligible next to the largest
+  # flow — a scale-relative check, since a tiny rate error on a 1e9 flow leaves an
+  # NPV of a few units that is still effectively zero.
+  defp assert_periodic_root(rate, amounts) do
+    npv = Finance.CashFlow.npv!(rate, amounts)
+    assert abs(npv) < 1.0e-6 * Enum.max(Enum.map(amounts, &abs/1))
+  end
+
+  defp assert_dated_root(rate, flows) do
+    npv = Finance.CashFlow.xnpv!(rate, flows)
+    scale = flows |> Enum.map(fn {_date, amount} -> abs(amount) end) |> Enum.max()
+    assert abs(npv) < 1.0e-6 * scale
+  end
+
   describe "Finance.Solver.Brent (alternative solver)" do
     test "reproduces the xirr regression anchors" do
       assert Finance.CashFlow.xirr(
