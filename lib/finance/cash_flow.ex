@@ -28,7 +28,8 @@ defmodule Finance.CashFlow do
       unwrap!: 1,
       options: 1,
       resolve_solver: 1,
-      present_value: 2
+      present_value: 2,
+      check_currency: 1
     ]
 
   @type date :: Finance.date()
@@ -198,7 +199,7 @@ defmodule Finance.CashFlow do
     opts = options(opts)
     flows = periodic_flows(amounts)
 
-    with :ok <- validate(flows) do
+    with :ok <- check_currency(amounts), :ok <- validate(flows) do
       resolve_solver(opts).solve(flows, opts)
     end
   end
@@ -260,7 +261,10 @@ defmodule Finance.CashFlow do
   def npv(rate, amounts, opts)
       when is_number(rate) and is_list(amounts) and is_list(opts) do
     opts = options(opts)
-    {:ok, round_value(present_value(periodic_flows(amounts), rate), opts)}
+
+    with :ok <- check_currency(amounts) do
+      {:ok, round_value(present_value(periodic_flows(amounts), rate), opts)}
+    end
   end
 
   @doc "Same as `npv/2`, but returns the value directly and raises `ArgumentError` on error."
@@ -288,13 +292,16 @@ defmodule Finance.CashFlow do
       when is_list(amounts) and is_number(finance_rate) and is_number(reinvest_rate) and
              is_list(opts) do
     opts = options(opts)
-    values = Enum.map(amounts, &to_amount/1)
-    n = length(values)
 
-    cond do
-      n < 2 -> {:error, :insufficient_data}
-      not signed_both_ways?(values) -> {:error, :single_signed_flow}
-      true -> {:ok, round_value(modified_irr(values, finance_rate, reinvest_rate, n), opts)}
+    with :ok <- check_currency(amounts) do
+      values = Enum.map(amounts, &to_amount/1)
+      n = length(values)
+
+      cond do
+        n < 2 -> {:error, :insufficient_data}
+        not signed_both_ways?(values) -> {:error, :single_signed_flow}
+        true -> {:ok, round_value(modified_irr(values, finance_rate, reinvest_rate, n), opts)}
+      end
     end
   end
 
@@ -374,11 +381,13 @@ defmodule Finance.CashFlow do
   end
 
   defp prepare_periodic(amounts) when is_list(amounts) do
-    flows = periodic_flows(amounts)
+    with :ok <- check_currency(amounts) do
+      flows = periodic_flows(amounts)
 
-    case validate(flows) do
-      :ok -> {:ready, flows}
-      error -> error
+      case validate(flows) do
+        :ok -> {:ready, flows}
+        error -> error
+      end
     end
   end
 
@@ -387,18 +396,20 @@ defmodule Finance.CashFlow do
   defp normalize([]), do: {:error, :insufficient_data}
 
   defp normalize(cash_flows) do
-    parsed = Enum.map(cash_flows, fn {date, amount} -> {to_date(date), to_amount(amount)} end)
-    min_date = parsed |> Enum.map(&elem(&1, 0)) |> Enum.min(Date)
+    with :ok <- check_currency(Enum.map(cash_flows, fn {_date, amount} -> amount end)) do
+      parsed = Enum.map(cash_flows, fn {date, amount} -> {to_date(date), to_amount(amount)} end)
+      min_date = parsed |> Enum.map(&elem(&1, 0)) |> Enum.min(Date)
 
-    flows =
-      parsed
-      |> Enum.reduce(%{}, fn {date, amount}, acc ->
-        period = Date.diff(date, min_date) / @days_in_year
-        Map.update(acc, period, amount, &(&1 + amount))
-      end)
-      |> Map.to_list()
+      flows =
+        parsed
+        |> Enum.reduce(%{}, fn {date, amount}, acc ->
+          period = Date.diff(date, min_date) / @days_in_year
+          Map.update(acc, period, amount, &(&1 + amount))
+        end)
+        |> Map.to_list()
 
-    {:ok, flows}
+      {:ok, flows}
+    end
   rescue
     _ in [ArgumentError, FunctionClauseError] -> {:error, :invalid_date}
   end

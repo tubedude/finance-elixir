@@ -15,6 +15,10 @@ jobs:
             otp: "27"
           - elixir: "1.20"
             otp: "29"
+          # Exercise the lower bound of `decimal ~> 2.0 or ~> 3.0`.
+          - elixir: "1.20"
+            otp: "29"
+            decimal: "2"
     steps:
       - uses: actions/checkout@v4
       - uses: erlef/setup-beam@v1
@@ -26,7 +30,10 @@ jobs:
           path: |
             deps
             _build
-          key: ${{ runner.os }}-mix-${{ matrix.elixir }}-${{ hashFiles('mix.lock') }}
+          key: ${{ runner.os }}-mix-${{ matrix.elixir }}-decimal${{ matrix.decimal || '3' }}-${{ hashFiles('mix.lock') }}
+      - name: Pin Decimal to 2.x
+        if: matrix.decimal == '2'
+        run: sed -i 's/~> 2.0 or ~> 3.0/~> 2.0/' mix.exs && mix deps.unlock decimal
       - run: mix deps.get
       - run: mix format --check-formatted
       - run: mix credo --strict

@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.5.1 — 2026-07-05
+
+### Added
+- Cash-flow amounts may now be `ex_money` `%Money{}` values, alongside numbers
+  and `Decimal`. Finance takes the `Decimal` amount without depending on ex_money,
+  and rejects a series that mixes currencies with `{:error, :mixed_currencies}`
+  (plain numbers and `Decimal` are currency-neutral and never conflict).
+
+### Changed
+- The optional `decimal` requirement is relaxed to `~> 2.0 or ~> 3.0`, so finance
+  can share a project with libraries pinned to Decimal 2.x — ex_money among them.
+
 ## 1.5.0 — 2026-07-05
 
 ### Added
