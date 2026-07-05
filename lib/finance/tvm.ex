@@ -277,14 +277,25 @@ defmodule Finance.TVM do
     {rows, _balance} =
       Enum.map_reduce(1..nper, opening, fn period, balance ->
         interest = round(-balance * rate)
-        principal = if period == nper, do: -balance, else: payment - interest
+        scheduled = if period == nper, do: -balance, else: payment - interest
+        # Keep the balance retiring toward zero within `[0, opening]`. Once
+        # `(1 + rate)^nper` is large, a cent-rounded level payment no longer tames
+        # the balance: rounded a hair high it overshoots below zero, a hair low it
+        # grows the balance back (negative amortization). Both are amplified period
+        # over period. Clamping keeps every schedule monotonic and bounded, with a
+        # final row that clears whatever remains.
+        principal = clamp_to_balance(scheduled, balance)
         new_balance = balance + principal
-        row_payment = if period == nper, do: interest + principal, else: payment
-        {{period, row_payment, interest, principal, new_balance}, new_balance}
+        {{period, interest + principal, interest, principal, new_balance}, new_balance}
       end)
 
     rows
   end
+
+  # Bound the principal to `[-balance, 0]`: never grow the balance (`min(_, 0)`)
+  # and never pay off more than is owed (`max(_, -balance)`), so it moves toward
+  # zero without overshooting. A normal amortizing payment already falls in range.
+  defp clamp_to_balance(scheduled, balance), do: scheduled |> max(-balance) |> min(0)
 
   defp row_to_float({period, payment, interest, principal, balance}, scale) do
     %{

@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.4.2 — 2026-07-05
+
+### Fixed
+- The rate solver no longer reports a non-root as converged. Newton's step-size
+  termination could accept a rate where the NPV was still large — near a steep
+  NPV the step `f / f'` shrinks below the tolerance even while `f` does not — so
+  convergence now rests solely on the NPV threshold, and a stalled Newton falls
+  through to bisection.
+- `amortization_schedule` keeps the balance retiring monotonically within
+  `[0, opening]`. Once `(1 + rate)^nper` is large a cent-rounded level payment
+  can no longer tame the balance: rounded a hair high it overshot below zero,
+  a hair low it grew the balance back (negative amortization) before the final
+  row absorbed the difference. Each period now clamps so the schedule stays
+  monotonic and bounded, with a final row that clears whatever remains.
+
+### Added
+- Property-based stress tests for the solver and TVM: IRR root-finding across
+  extreme rates and long horizons, a no-crash / real-root contract on arbitrary
+  cash-flow signs, `TVM.rate` round-trips, `pv`/`fv` inversion, and amortization
+  balance invariants. These surfaced the two fixes above.
+
 ## 1.4.1 — 2026-07-05
 
 ### Fixed

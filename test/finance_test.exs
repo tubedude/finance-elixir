@@ -781,6 +781,18 @@ defmodule FinanceTest do
       assert List.first(rows).interest == -8.3333
     end
 
+    test "an ill-conditioned rate never drives the balance negative" do
+      # 26.55%/period over 79 periods: `(1 + rate)^nper` is enormous, so the
+      # cent-rounded level payment overshoots. The balance must still march down
+      # to zero and stop there, never into money that isn't owed.
+      assert {:ok, rows} = Finance.TVM.amortization_schedule(0.2655, 79, 409_239)
+      balances = Enum.map(rows, & &1.balance)
+      assert Enum.all?(balances, &(&1 >= 0.0))
+      assert balances == Enum.sort(balances, :desc)
+      assert List.last(rows).balance == 0.0
+      assert_in_delta Enum.sum(Enum.map(rows, & &1.principal)), -409_239, 0.01
+    end
+
     test "at zero rate principal is spread evenly" do
       assert {:ok, rows} = Finance.TVM.amortization_schedule(0.0, 4, 1000)
       assert Enum.map(rows, & &1.principal) == [-250.0, -250.0, -250.0, -250.0]
@@ -904,5 +916,114 @@ defmodule FinanceTest do
         end
       end
     end
+  end
+
+  describe "solver and TVM stress properties" do
+    # Finance a stream of positive inflows so the outlay is exactly their present
+    # value at a known rate. That gives a single sign change (one real IRR) over
+    # rates and horizons extreme enough to stress the Newton/bisection solver, and
+    # we confirm the rate it returns drives the NPV back to ~zero.
+    property "irr finds a root that zeroes the NPV across extreme rates and long horizons" do
+      check all(
+              rate_bp <- integer(-9_000..80_000),
+              inflows <- list_of(integer(1..1_000_000), min_length: 1, max_length: 40)
+            ) do
+        rate = rate_bp / 10_000
+        outlay = present_value_at(rate, Enum.with_index(inflows, 1))
+        flows = [-outlay | inflows]
+
+        case Finance.CashFlow.irr(flows, precision: 12) do
+          {:ok, found} ->
+            npv = present_value_at(found, Enum.with_index(flows, 0))
+            assert_in_delta npv, 0.0, 1.0e-4 * (abs(outlay) + 1)
+
+          {:error, reason} ->
+            assert reason in [:did_not_converge, :single_signed_flow, :insufficient_data]
+        end
+      end
+    end
+
+    # The wild-edge-case contract: whatever signs the flows take — including the
+    # many-sign-change cases that admit several IRRs — the solver must never
+    # crash. It either returns a rate sitting on a genuine sign change of the NPV
+    # (a real root) or one of the documented errors.
+    property "irr never crashes on arbitrary flows; any rate it returns brackets a real root" do
+      check all(amounts <- list_of(integer(-1_000_000..1_000_000), max_length: 30)) do
+        case Finance.CashFlow.irr(amounts, precision: 10) do
+          {:ok, rate} ->
+            assert is_float(rate) and rate > -1.0
+            indexed = Enum.with_index(amounts, 0)
+            # Assert a zero-crossing rather than the NPV magnitude: a steep NPV is
+            # large even a hair from its root, whereas a spurious non-root shows
+            # no crossing at all. The window sits well inside the (-1, ∞) domain.
+            h = min(max(abs(rate), 1.0) * 1.0e-6, (1.0 + rate) / 2)
+            below = present_value_at(rate - h, indexed)
+            above = present_value_at(rate + h, indexed)
+            assert (below <= 0 and above >= 0) or (below >= 0 and above <= 0)
+
+          {:error, reason} ->
+            assert reason in [:insufficient_data, :single_signed_flow, :did_not_converge]
+        end
+      end
+    end
+
+    # Round-trip through the TVM solver: build a loan's present value from a known
+    # rate, then confirm `rate/6` recovers it — over terms up to 600 periods.
+    property "TVM.rate recovers the rate a loan was built at" do
+      check all(
+              rate_bp <- integer(1..5_000),
+              nper <- integer(2..600),
+              pmt <- integer(-1_000_000..-1)
+            ) do
+        rate = rate_bp / 10_000
+        assert {:ok, pv} = Finance.TVM.pv(rate, nper, pmt, 0.0, 0)
+        assert {:ok, found} = Finance.TVM.rate(nper, pmt, pv, 0.0, 0, precision: 10)
+        assert_in_delta found, rate, 1.0e-4
+      end
+    end
+
+    # `pv` and `fv` are inverse views of the same annuity, so composing them
+    # returns the value untouched.
+    property "pv and fv invert each other" do
+      check all(
+              rate_bp <- integer(0..50_000),
+              nper <- integer(1..240),
+              pmt <- integer(-1_000_000..1_000_000),
+              pv <- integer(-1_000_000..1_000_000)
+            ) do
+        rate = rate_bp / 10_000
+        assert {:ok, fv} = Finance.TVM.fv(rate, nper, pmt, pv, 0)
+        assert {:ok, back} = Finance.TVM.pv(rate, nper, pmt, fv, 0)
+        assert_in_delta back, pv, 1.0e-3 * (abs(pv) + abs(pmt) + 1)
+      end
+    end
+
+    # Whatever the rate, term, or size, the integer-minor-unit engine must retire
+    # the balance to exactly zero and have the principal portions sum to the loan.
+    property "the amortization schedule pays the balance down to exactly zero" do
+      check all(
+              rate_bp <- integer(0..3_000),
+              nper <- integer(1..360),
+              pv <- integer(100..1_000_000)
+            ) do
+        rate = rate_bp / 10_000
+        assert {:ok, rows} = Finance.TVM.amortization_schedule(rate, nper, pv)
+        assert length(rows) == nper
+        assert List.last(rows).balance == 0.0
+        assert_in_delta Enum.sum(Enum.map(rows, & &1.principal)), -pv, 1.0e-6 * pv + 0.01
+        balances = Enum.map(rows, & &1.balance)
+        # Monotonically non-increasing, and it never overshoots into a balance you
+        # don't owe — even when a cent-rounded payment is amplified over the term.
+        assert balances == Enum.sort(balances, :desc)
+        assert Enum.all?(balances, &(&1 >= 0.0))
+      end
+    end
+  end
+
+  # Present value of `{amount, period}` pairs at `rate`: Σ amount / (1 + rate)^period.
+  defp present_value_at(rate, indexed_flows) do
+    Enum.reduce(indexed_flows, 0.0, fn {amount, t}, acc ->
+      acc + amount / :math.pow(1 + rate, t)
+    end)
   end
 end
