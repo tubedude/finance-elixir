@@ -9,8 +9,9 @@ defmodule Finance.CashFlow do
   amounts at equally spaced periods `0, 1, 2, …`.
 
   `xirr`/`irr` find the rate `r` that brings the net present value to zero,
-  `Σ cf_i / (1 + r)^t_i = 0`, using `Finance.Solver` (Newton-Raphson with a
-  bisection fallback by default).
+  `Σ cf_i / (1 + r)^t_i = 0`, using `Finance.Solver` (a safeguarded
+  Newton-Raphson by default, with a derivative-free `Finance.Solver.Brent`
+  available).
 
   ## Options
 
