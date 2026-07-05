@@ -29,7 +29,7 @@ defmodule Finance.Shared do
                     solver: [
                       type: :atom,
                       doc:
-                        "module implementing the `Finance.Solver` behaviour (defaults to `Finance.Solver.Newton`)"
+                        "module implementing the `Finance.Solver` behaviour; defaults to `Finance.Solver.Newton`, with the derivative-free `Finance.Solver.Brent` also available"
                     ]
                   )
 
