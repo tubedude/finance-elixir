@@ -1,7 +1,7 @@
 defmodule Finance.MixProject do
   use Mix.Project
 
-  @version "1.4.3"
+  @version "1.5.0"
   @source_url "https://github.com/tubedude/finance-elixir"
 
   def project do
@@ -25,7 +25,8 @@ defmodule Finance.MixProject do
         coveralls: :test,
         "coveralls.detail": :test,
         "coveralls.post": :test,
-        "coveralls.html": :test
+        "coveralls.html": :test,
+        "coveralls.github": :test
       ]
     ]
   end

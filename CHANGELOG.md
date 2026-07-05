@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.5.0 — 2026-07-05
+
+### Added
+- `Finance.CashFlow.irr_many/2` and `xirr_many/2` — solve a whole batch of
+  independent series in one call, returning a list of `{:ok, rate}` /
+  `{:error, reason}` in the same order (one bad series doesn't sink the batch).
+  They run on the configured solver: the default pure-Elixir solver parallelizes
+  across schedulers with `Task.async_stream`, while a native (Rustler) or Nx
+  backend can run the whole batch in a single call.
+- `Finance.Solver` gains a `solve_many/2` callback for that batch seam.
+
+### Changed
+- Custom `Finance.Solver` implementations must now provide `solve_many/2`
+  alongside `solve/2`. The shipped `Finance.Solver.Newton` implements it (the
+  parallel default), so the built-in behaviour is unchanged.
+
+### Fixed
+- `finance` now compiles when the optional `decimal` dependency is absent.
+  Two functions matched `%Decimal{}` in their head, and a struct pattern is
+  resolved at compile time — so a consumer who depended on `finance` without also
+  adding `decimal` hit `struct Decimal is undefined` at compile. The two heads now
+  use `is_struct(value, Decimal)` guards (runtime, no compile-time module needed),
+  so the Decimal support is genuinely optional. Behaviour with `decimal` present
+  is unchanged.
+- The solver now converges over very long horizons that a high-rate probe would
+  overflow. Bracketing evaluates the NPV at rate `1.0`, where `(1 + 1)^t`
+  overflows once `t` is large (e.g. a 2000-period flow) — and Erlang's
+  `:math.pow` raises on overflow, which aborted the whole solve to
+  `:did_not_converge`. `present_value` and the solver's derivative now discount
+  with a negative exponent (`amount * (1 + rate)^-t`), so the factor underflows
+  to a negligible `0` instead of overflowing. Results for normal flows are
+  unchanged.
+
 ## 1.4.3 — 2026-07-05
 
 ### Changed

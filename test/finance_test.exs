@@ -3,6 +3,8 @@ defmodule StubSolver do
   @behaviour Finance.Solver
   @impl true
   def solve(_flows, _opts), do: {:ok, 0.42}
+  @impl true
+  def solve_many(batch, _opts), do: Enum.map(batch, fn _ -> {:ok, 0.42} end)
 end
 
 defmodule FinanceTest do
@@ -20,6 +22,11 @@ defmodule FinanceTest do
     test "the solver is swappable via the :solver option" do
       assert Finance.CashFlow.irr([-1000, 1100], solver: StubSolver) == {:ok, 0.42}
       assert Finance.TVM.rate(10, -100, 1000, 0.0, 0, solver: StubSolver) == {:ok, 0.42}
+    end
+
+    test "batch functions dispatch through the solver's solve_many" do
+      assert Finance.CashFlow.irr_many([[-1000, 1100], [-1000, 1200]], solver: StubSolver) ==
+               [{:ok, 0.42}, {:ok, 0.42}]
     end
 
     test "the shared options docs are generated from the schema" do
@@ -273,6 +280,62 @@ defmodule FinanceTest do
       {:ok, pv} = Finance.TVM.pv(0.011, 471, -1, 0.0, 0)
       assert {:ok, rate} = Finance.TVM.rate(471, -1, pv, 0.0, 0, precision: 10)
       assert_in_delta rate, 0.011, 1.0e-6
+    end
+
+    test "converges over very long horizons where a high-rate probe would overflow" do
+      # Bracketing probes the NPV at rate 1.0; over 2000 periods `2^2000` overflows.
+      # Discounting with a negative exponent underflows to 0 there instead of
+      # raising, so the solve still finds the (small) root.
+      {:ok, pv} = Finance.TVM.pv(0.002, 2000, -1, 0.0, 0)
+      assert {:ok, rate} = Finance.TVM.rate(2000, -1, pv, 0.0, 0, precision: 10)
+      assert_in_delta rate, 0.002, 1.0e-6
+    end
+  end
+
+  describe "batch — irr_many/xirr_many" do
+    test "irr_many matches mapping irr over the series" do
+      series = [[-1000, 1100], [-1000, 500, 500, 300], [-500, 200, 200, 200]]
+      assert Finance.CashFlow.irr_many(series) == Enum.map(series, &Finance.CashFlow.irr/1)
+    end
+
+    test "a batch larger than the chunk count keeps order and results" do
+      # Spans several chunks, with a distinct rate per series so order matters.
+      series = for i <- 1..100, do: [-1000, 1000 + i]
+      assert Finance.CashFlow.irr_many(series) == Enum.map(series, &Finance.CashFlow.irr/1)
+    end
+
+    test "xirr_many matches mapping xirr over the series" do
+      series = [
+        [{~D[2019-01-01], -1000}, {~D[2020-01-01], 1100}],
+        [{~D[2019-01-01], -1000}, {~D[2020-01-01], 1200}]
+      ]
+
+      assert Finance.CashFlow.xirr_many(series) == Enum.map(series, &Finance.CashFlow.xirr/1)
+    end
+
+    test "a bad series returns its error without sinking the batch, order preserved" do
+      series = [[-1000, 1100], [100, 200], []]
+
+      assert Finance.CashFlow.irr_many(series) ==
+               [{:ok, 0.1}, {:error, :single_signed_flow}, {:error, :insufficient_data}]
+    end
+
+    test "an invalid date in one dated series only fails that series" do
+      series = [
+        [{~D[2019-01-01], -1000}, {~D[2020-01-01], 1100}],
+        [{{2019, 13, 1}, -1000}, {~D[2020-01-01], 1100}]
+      ]
+
+      assert Finance.CashFlow.xirr_many(series) == [{:ok, 0.1}, {:error, :invalid_date}]
+    end
+
+    test "an empty batch is an empty list" do
+      assert Finance.CashFlow.irr_many([]) == []
+      assert Finance.CashFlow.xirr_many([]) == []
+    end
+
+    test "options apply to every series in the batch" do
+      assert Finance.CashFlow.irr_many([[-1000, 1100]], precision: 2) == [{:ok, 0.1}]
     end
   end
 

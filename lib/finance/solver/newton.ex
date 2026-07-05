@@ -25,9 +25,33 @@ defmodule Finance.Solver.Newton do
     max_iterations = Keyword.fetch!(opts, :max_iterations)
 
     case safely(fn -> rtsafe(flows, guess, tolerance, max_iterations) end) do
-      {:ok, rate} -> {:ok, Float.round(rate, Keyword.fetch!(opts, :precision))}
+      # `+ 0.0` collapses a negative zero (a rate that converges to 0 from below).
+      {:ok, rate} -> {:ok, Float.round(rate, Keyword.fetch!(opts, :precision)) + 0.0}
       :diverged -> {:error, :did_not_converge}
     end
+  end
+
+  @impl Finance.Solver
+  def solve_many(batch, opts) do
+    # Pure-Elixir batch: split the work into a handful of chunks per scheduler and
+    # solve each chunk on its own task. Chunking (rather than one task per series)
+    # amortizes the spawn cost, so it stays ahead of a sequential map even when
+    # each solve is tiny. A native backend would override this with one batched
+    # call.
+    batch
+    |> Stream.chunk_every(chunk_size(batch))
+    |> Task.async_stream(fn chunk -> Enum.map(chunk, &solve(&1, opts)) end,
+      ordered: true,
+      timeout: :infinity
+    )
+    |> Enum.flat_map(fn {:ok, results} -> results end)
+  end
+
+  # Aim for ~4 chunks per scheduler: enough to keep every core busy and balance
+  # uneven series, while large enough that the per-task overhead is negligible.
+  defp chunk_size(batch) do
+    chunks = System.schedulers_online() * 4
+    max(1, div(length(batch) + chunks - 1, chunks))
   end
 
   # Arithmetic overflow at extreme rates on long-dated flows is treated as a
@@ -125,10 +149,13 @@ defmodule Finance.Solver.Newton do
   # is astronomically large near the bracket's floor for long-dated flows.
   defp straddles_zero?(a, b), do: (a <= 0 and b >= 0) or (a >= 0 and b <= 0)
 
-  # Derivative of the NPV with respect to rate: Σ -t · amount / (1 + rate)^(t+1)
+  # Derivative of the NPV with respect to rate: Σ -t · amount / (1 + rate)^(t+1).
+  # Uses a negative exponent for the same reason as `present_value/2`: the factor
+  # underflows to 0 at high rates instead of overflowing the denominator (which
+  # `:math.pow` would raise on) for long-dated flows.
   defp present_value_derivative(flows, rate) do
     Enum.reduce(flows, 0.0, fn {t, amount}, acc ->
-      acc + -t * amount / :math.pow(1 + rate, t + 1)
+      acc + -t * amount * :math.pow(1 + rate, -(t + 1))
     end)
   end
 end
