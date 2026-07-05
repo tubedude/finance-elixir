@@ -298,6 +298,12 @@ defmodule FinanceTest do
       assert Finance.CashFlow.irr_many(series) == Enum.map(series, &Finance.CashFlow.irr/1)
     end
 
+    test "a batch larger than the chunk count keeps order and results" do
+      # Spans several chunks, with a distinct rate per series so order matters.
+      series = for i <- 1..100, do: [-1000, 1000 + i]
+      assert Finance.CashFlow.irr_many(series) == Enum.map(series, &Finance.CashFlow.irr/1)
+    end
+
     test "xirr_many matches mapping xirr over the series" do
       series = [
         [{~D[2019-01-01], -1000}, {~D[2020-01-01], 1100}],

@@ -33,11 +33,25 @@ defmodule Finance.Solver.Newton do
 
   @impl Finance.Solver
   def solve_many(batch, opts) do
-    # Pure-Elixir batch: solve each series in parallel across the schedulers.
-    # A native backend would override this with a single batched call.
+    # Pure-Elixir batch: split the work into a handful of chunks per scheduler and
+    # solve each chunk on its own task. Chunking (rather than one task per series)
+    # amortizes the spawn cost, so it stays ahead of a sequential map even when
+    # each solve is tiny. A native backend would override this with one batched
+    # call.
     batch
-    |> Task.async_stream(&solve(&1, opts), ordered: true, timeout: :infinity)
-    |> Enum.map(fn {:ok, result} -> result end)
+    |> Stream.chunk_every(chunk_size(batch))
+    |> Task.async_stream(fn chunk -> Enum.map(chunk, &solve(&1, opts)) end,
+      ordered: true,
+      timeout: :infinity
+    )
+    |> Enum.flat_map(fn {:ok, results} -> results end)
+  end
+
+  # Aim for ~4 chunks per scheduler: enough to keep every core busy and balance
+  # uneven series, while large enough that the per-task overhead is negligible.
+  defp chunk_size(batch) do
+    chunks = System.schedulers_online() * 4
+    max(1, div(length(batch) + chunks - 1, chunks))
   end
 
   # Arithmetic overflow at extreme rates on long-dated flows is treated as a
