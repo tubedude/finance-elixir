@@ -40,8 +40,11 @@ defmodule Finance do
   @typedoc "A date, given either as a `Date` struct or as an Erlang-style `{year, month, day}` tuple."
   @type date :: Date.t() | {integer, integer, integer}
 
-  @typedoc "A cash-flow amount: any number, or a `Decimal` when that optional dependency is installed."
-  @type amount :: number | Decimal.t()
+  @typedoc """
+  A cash-flow amount: a number, a `Decimal`, or an `ex_money` `%Money{}` (when
+  those optional libraries are installed). A single series may not mix currencies.
+  """
+  @type amount :: number | Decimal.t() | struct()
 
   @typedoc "A cash flow on a given date. Money coming in is positive, money going out is negative."
   @type cash_flow :: {date, amount}
@@ -65,6 +68,7 @@ defmodule Finance do
           | :invalid_date
           | :did_not_converge
           | :undefined
+          | :mixed_currencies
 
   # === Finance.CashFlow ====================================================
 

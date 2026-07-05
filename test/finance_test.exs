@@ -454,6 +454,47 @@ defmodule FinanceTest do
     end
   end
 
+  describe "ex_money amounts (optional)" do
+    test "accepts %Money{} amounts, matching the numeric result" do
+      dated = [{~D[2019-01-01], money(:USD, "-1000")}, {~D[2020-01-01], money(:USD, "1100")}]
+      assert Finance.CashFlow.xirr(dated) == {:ok, 0.1}
+      assert Finance.CashFlow.irr([money(:USD, "-1000"), money(:USD, "1100")]) == {:ok, 0.1}
+      assert Finance.CashFlow.npv(0.1, [money(:USD, "-1000"), money(:USD, "1100")]) == {:ok, 0.0}
+    end
+
+    test "a plain number alongside Money is currency-neutral and allowed" do
+      assert Finance.CashFlow.irr([money(:USD, "-1000"), 1100]) == {:ok, 0.1}
+    end
+
+    test "mixing currencies is rejected across the functions" do
+      assert Finance.CashFlow.irr([money(:USD, "-1000"), money(:EUR, "1100")]) ==
+               {:error, :mixed_currencies}
+
+      dated = [{~D[2019-01-01], money(:USD, "-1000")}, {~D[2020-01-01], money(:EUR, "1100")}]
+      assert Finance.CashFlow.xirr(dated) == {:error, :mixed_currencies}
+      assert Finance.CashFlow.xnpv(0.1, dated) == {:error, :mixed_currencies}
+
+      assert Finance.CashFlow.npv(0.1, [money(:USD, "-1000"), money(:EUR, "1100")]) ==
+               {:error, :mixed_currencies}
+
+      assert Finance.CashFlow.mirr(
+               [money(:USD, "-100"), money(:EUR, "50"), money(:USD, "80")],
+               0.1,
+               0.1
+             ) ==
+               {:error, :mixed_currencies}
+    end
+
+    test "batch functions reject mixed currencies per series" do
+      series = [
+        [money(:USD, "-1000"), money(:USD, "1100")],
+        [money(:USD, "-1000"), money(:EUR, "1100")]
+      ]
+
+      assert Finance.CashFlow.irr_many(series) == [{:ok, 0.1}, {:error, :mixed_currencies}]
+    end
+  end
+
   describe "TVM scalars" do
     test "fv, pv, pmt, nper are mutually consistent" do
       # A payment that pays off pv over nper periods should give fv ~ 0.
@@ -1110,4 +1151,7 @@ defmodule FinanceTest do
       acc + amount / :math.pow(1 + rate, t)
     end)
   end
+
+  # A stand-in for ex_money's `%Money{}` (see test/support/money.ex).
+  defp money(currency, amount), do: %Money{currency: currency, amount: Decimal.new(amount)}
 end

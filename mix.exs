@@ -1,7 +1,7 @@
 defmodule Finance.MixProject do
   use Mix.Project
 
-  @version "1.5.0"
+  @version "1.5.1"
   @source_url "https://github.com/tubedude/finance-elixir"
 
   def project do
@@ -9,6 +9,7 @@ defmodule Finance.MixProject do
       app: :finance,
       version: @version,
       elixir: "~> 1.18",
+      elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       description: description(),
       package: package(),
@@ -18,6 +19,11 @@ defmodule Finance.MixProject do
       docs: docs()
     ]
   end
+
+  # A stand-in `Money` struct lives in test/support so the suite can exercise the
+  # ex_money path without depending on ex_money (and its Decimal 2.x pin).
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_), do: ["lib"]
 
   def cli do
     [
@@ -59,7 +65,7 @@ defmodule Finance.MixProject do
 
   defp deps do
     [
-      {:decimal, "~> 3.0", optional: true},
+      {:decimal, "~> 2.0 or ~> 3.0", optional: true},
       {:nimble_options, "~> 1.1"},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},

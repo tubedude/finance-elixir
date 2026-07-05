@@ -64,12 +64,31 @@ defmodule Finance.Shared do
   def unwrap!({:error, reason}), do: raise(ArgumentError, "could not compute: #{reason}")
 
   @doc """
-  Coerce a cash-flow amount to a float. Accepts plain numbers and, when the
-  optional Decimal dependency is present, `%Decimal{}` values.
+  Coerce a cash-flow amount to a float. Accepts plain numbers, `%Decimal{}`
+  values, and `ex_money`'s `%Money{}` (its `Decimal` amount is taken; the
+  currency is validated separately by `check_currency/1`).
   """
-  @spec to_amount(number | Decimal.t()) :: float
+  @spec to_amount(number | struct()) :: float
   def to_amount(amount) when is_number(amount), do: amount / 1
   def to_amount(amount) when is_struct(amount, Decimal), do: Decimal.to_float(amount)
+  def to_amount(amount) when is_struct(amount, Money), do: Decimal.to_float(amount.amount)
+
+  @doc """
+  Reject a series that mixes currencies. Only `%Money{}` amounts carry a currency;
+  plain numbers and `%Decimal{}` are currency-neutral and ignored. Returns `:ok`,
+  or `{:error, :mixed_currencies}` once two distinct currencies appear.
+  """
+  @spec check_currency([term]) :: :ok | {:error, :mixed_currencies}
+  def check_currency(amounts) do
+    amounts
+    |> Enum.filter(&is_struct(&1, Money))
+    |> Enum.map(& &1.currency)
+    |> Enum.uniq()
+    |> case do
+      [_first, _second | _rest] -> {:error, :mixed_currencies}
+      _none_or_one -> :ok
+    end
+  end
 
   @doc "Net present value of normalized flows at `rate`: `Σ amount / (1 + rate)^t`."
   @spec present_value([{number, number}], number) :: float

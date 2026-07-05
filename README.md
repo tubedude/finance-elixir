@@ -90,7 +90,7 @@ One thing to watch: `npv/2` places the first amount at period 0, which is what
 makes `npv(irr(a), a) ≈ 0` hold. A spreadsheet `NPV` instead places the first
 amount at period 1, so the two won't agree unless you account for that.
 
-### Amounts and Decimal
+### Amounts: numbers, Decimal, and Money
 
 Amounts may be any number — integer minor units such as cents, or floats. If your
 app already depends on [`Decimal`](https://hex.pm/packages/decimal), you can pass
@@ -101,10 +101,24 @@ Finance.CashFlow.xirr([{~D[2019-01-01], Decimal.new("-1000")}, {~D[2020-01-01], 
 #=> {:ok, 0.1}
 ```
 
-`Decimal` is an optional dependency, so apps that don't use it pull in nothing
-extra. Either way the result comes back as a float: XIRR's math is inherently
-irrational, so accepting `Decimal` is about convenience at the call site, not
-added precision in the answer.
+[`ex_money`](https://hex.pm/packages/ex_money) `%Money{}` values work too — common
+when amounts come from an Ecto money column — and here the currency matters:
+
+```elixir
+Finance.CashFlow.xirr([{~D[2019-01-01], Money.new(:USD, "-1000")}, {~D[2020-01-01], Money.new(:USD, "1100")}])
+#=> {:ok, 0.1}
+
+# A series may not mix currencies:
+Finance.CashFlow.irr([Money.new(:USD, "-1000"), Money.new(:EUR, "1100")])
+#=> {:error, :mixed_currencies}
+```
+
+Both `Decimal` and `ex_money` are optional — apps that don't use them pull in
+nothing extra (finance reads a `%Money{}`'s amount without depending on it). Plain
+numbers and `Decimal` are currency-neutral, so they never trip the currency check.
+Either way the result comes back as a float: rate-of-return math is inherently
+irrational, so accepting these types is convenience at the call site, not added
+precision in the answer.
 
 ### Errors
 
@@ -118,6 +132,7 @@ When the data can't produce a result, `xirr/1` and `xirr/2` return
 | `:single_signed_flow`  | all amounts have the same sign                   |
 | `:invalid_date`        | a date could not be parsed                       |
 | `:did_not_converge`    | no rate found within the iteration limit         |
+| `:mixed_currencies`    | a series mixes two or more `%Money{}` currencies |
 
 ## Solver
 
