@@ -17,7 +17,9 @@ defmodule Finance do
     * `Finance.Returns` — performance and risk metrics (`volatility`, `cagr`,
       `payback_period`, `discounted_payback_period`, `profitability_index`, `twr`).
     * `Finance.Solver` — the root-finding strategy behind the rate functions,
-      swappable via the `:solver` option or `config :finance, solver: MySolver`.
+      swappable via the `:solver` option or `config :finance, solver: MySolver`
+      (the default is `Finance.Solver.Newton`; `Finance.Solver.Brent` is a
+      derivative-free alternative that is faster on long-horizon flows).
 
   ## Deprecated flat API
 

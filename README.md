@@ -145,6 +145,12 @@ in a single pass. Because the maintained bracket always encloses a sign change,
 the result is a genuine root rather than a stalled non-root. The solver is
 swappable via the `:solver` option or `config :finance, solver: MySolver`.
 
+`Finance.Solver.Brent` ships as an alternative: Brent's method, which is
+derivative-free and so spends one NPV evaluation per step instead of two. On
+short series the default is quicker, but Brent is faster on long-horizon flows —
+long amortization schedules or bond ladders — where each evaluation is expensive.
+Pass `solver: Finance.Solver.Brent` where it pays.
+
 `bench/solver_strategies.exs` compares it against the alternatives across flow
 sets of growing length (NPV/derivative evaluations per solve, and median time):
 

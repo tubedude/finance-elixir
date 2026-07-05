@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.6.0 — 2026-07-05
+
+### Added
+- `Finance.Solver.Brent` — an alternative solver using Brent's method (bracketing
+  secant + inverse-quadratic interpolation + bisection). It uses no derivative, so
+  each iteration costs a single NPV evaluation rather than two, which makes it
+  faster on long-horizon flows (long amortization schedules, bond ladders) where
+  each evaluation is expensive. The default `Finance.Solver.Newton` stays quicker
+  on short series, so it remains the default; select Brent with
+  `solver: Finance.Solver.Brent` or `config :finance, solver: Finance.Solver.Brent`.
+
 ## 1.5.1 — 2026-07-05
 
 ### Added
