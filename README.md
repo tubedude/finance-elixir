@@ -144,6 +144,42 @@ it burns its whole iteration budget before a separate bisection pass rescues it
 (~9× slower). Safeguarded Newton is the best all-rounder — fastest on the longer
 sets, close behind on the shortest. Run it with `mix run bench/solver_strategies.exs`.
 
+### Batch and the native backend
+
+`Finance.CashFlow.irr_many/2` and `xirr_many/2` solve a whole portfolio in one
+call, returning a list of `{:ok, rate}` / `{:error, reason}` in order. They
+dispatch through the solver's `solve_many/2`, which the default solver runs in
+parallel across schedulers (chunked `Task.async_stream`).
+
+Because the solver is swappable, a batch can run on a **native backend** with no
+API change. [`finance_rustler`](https://github.com/tubedude/finance_rustler) is a
+Rust (Rustler) backend whose `solve_many/2` runs the whole batch in one call over
+a rayon thread pool — add it and point `:solver` at it:
+
+```elixir
+# mix.exs
+{:finance, "~> 1.5"},
+{:finance_rustler, "~> 0.1"}
+
+# config/config.exs
+config :finance, solver: FinanceRustler.Solver
+```
+
+Its `bench/solve_many.exs` compares the batch strategies — median time to solve a
+whole batch:
+
+| batch                  | native (rayon) | pure (chunked) | sequential |
+| ---------------------- | -------------- | -------------- | ---------- |
+| 1,000 × 4-flow         | 2.4 ms         | 7.6 ms         | 8.1 ms     |
+| 1,000 × 60-period loan | 14.8 ms        | 23.7 ms        | 185 ms     |
+| 5,000 × 60-period loan | 114 ms         | 98 ms          | 1,004 ms   |
+
+Both parallel strategies beat a sequential map by 10–13×. The native backend is
+fastest on batches of small series (~3× on the 4-flow set); the chunked pure
+solver pulls even on large, heavier batches and uses far less memory. So the
+native backend is an opt-in for throughput and for keeping heavy work off the
+BEAM schedulers — not a requirement.
+
 ## Development
 
 ```bash
