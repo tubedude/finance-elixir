@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.4.4 — 2026-07-05
+
+### Fixed
+- `finance` now compiles when the optional `decimal` dependency is absent.
+  Two functions matched `%Decimal{}` in their head, and a struct pattern is
+  resolved at compile time — so a consumer who depended on `finance` without also
+  adding `decimal` hit `struct Decimal is undefined` at compile. The two heads now
+  use `is_struct(value, Decimal)` guards (runtime, no compile-time module needed),
+  so the Decimal support is genuinely optional. Behaviour with `decimal` present
+  is unchanged.
+
 ## 1.4.3 — 2026-07-05
 
 ### Changed

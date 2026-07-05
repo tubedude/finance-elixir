@@ -68,8 +68,8 @@ defmodule Finance.Shared do
   optional Decimal dependency is present, `%Decimal{}` values.
   """
   @spec to_amount(number | Decimal.t()) :: float
-  def to_amount(%Decimal{} = amount), do: Decimal.to_float(amount)
   def to_amount(amount) when is_number(amount), do: amount / 1
+  def to_amount(amount) when is_struct(amount, Decimal), do: Decimal.to_float(amount)
 
   @doc "Net present value of normalized flows at `rate`: `Σ amount / (1 + rate)^t`."
   @spec present_value([{number, number}], number) :: float

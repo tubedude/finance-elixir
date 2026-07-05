@@ -319,8 +319,8 @@ defmodule Finance.TVM do
 
   defp units_to_decimal(units, scale), do: Decimal.div(Decimal.new(units), scale)
 
-  defp to_float(%Decimal{} = value), do: Decimal.to_float(value)
   defp to_float(value) when is_number(value), do: value * 1.0
+  defp to_float(value) when is_struct(value, Decimal), do: Decimal.to_float(value)
 
   @doc """
   Works out how many periods it takes for payments of `pmt` to pay off a present
