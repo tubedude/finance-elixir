@@ -1,6 +1,8 @@
 # Finance
 
 [![CI](https://github.com/tubedude/finance-elixir/actions/workflows/ci.yml/badge.svg)](https://github.com/tubedude/finance-elixir/actions/workflows/ci.yml)
+[![Hex.pm](https://img.shields.io/hexpm/v/finance.svg)](https://hex.pm/packages/finance)
+[![Hex Docs](https://img.shields.io/badge/hex-docs-8e5ea2.svg)](https://hexdocs.pm/finance)
 
 An Elixir library for cash-flow analysis. It covers internal rate of return
 (`xirr`/`irr`), net present value (`xnpv`/`npv`), and modified IRR (`mirr`),
