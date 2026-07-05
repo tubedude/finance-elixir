@@ -13,6 +13,8 @@ defmodule FinanceTest do
   doctest Finance.TVM
   doctest Finance.Depreciation
   doctest Finance.Returns
+  doctest Finance.Rates
+  doctest Finance.Bonds
 
   describe "module organization" do
     test "the solver is swappable via the :solver option" do
@@ -547,6 +549,223 @@ defmodule FinanceTest do
     test "volatility!/1 returns the bare value and raises on error" do
       assert Finance.Returns.volatility!([100, 102, 101, 103, 105]) == 0.234528
       assert_raise ArgumentError, fn -> Finance.Returns.volatility!([100]) end
+    end
+  end
+
+  describe "ipmt/6 and ppmt/6" do
+    test "match Excel for a simple loan" do
+      assert {:ok, i} = Finance.TVM.ipmt(0.10 / 12, 1, 12, 1000)
+      assert Float.round(i, 6) == -8.333333
+      assert {:ok, p} = Finance.TVM.ppmt(0.10 / 12, 1, 12, 1000)
+      assert Float.round(p, 6) == -79.582554
+      assert {:ok, i6} = Finance.TVM.ipmt(0.10 / 12, 6, 12, 1000)
+      assert Float.round(i6, 6) == -4.961665
+    end
+
+    test "interest plus principal equals the payment every period" do
+      assert {:ok, payment} = Finance.TVM.pmt(0.10 / 12, 12, 1000)
+
+      for per <- 1..12 do
+        assert {:ok, i} = Finance.TVM.ipmt(0.10 / 12, per, 12, 1000)
+        assert {:ok, p} = Finance.TVM.ppmt(0.10 / 12, per, 12, 1000)
+        assert_in_delta i + p, payment, 1.0e-9
+      end
+    end
+
+    test "at zero rate all of the payment is principal" do
+      assert Finance.TVM.ipmt(0.0, 3, 12, 1200) == {:ok, 0.0}
+      assert {:ok, p} = Finance.TVM.ppmt(0.0, 3, 12, 1200)
+      assert_in_delta p, -100.0, 1.0e-9
+    end
+
+    test "supports annuity-due (type: 1) with no first-period interest" do
+      assert Finance.TVM.ipmt(0.10 / 12, 1, 12, 1000, 0.0, 1) == {:ok, 0.0}
+      # A later period discounts the interest one step; still reconciles to pmt.
+      assert {:ok, payment} = Finance.TVM.pmt(0.10 / 12, 12, 1000, 0.0, 1)
+      assert {:ok, i2} = Finance.TVM.ipmt(0.10 / 12, 2, 12, 1000, 0.0, 1)
+      assert {:ok, p2} = Finance.TVM.ppmt(0.10 / 12, 2, 12, 1000, 0.0, 1)
+      assert_in_delta i2 + p2, payment, 1.0e-9
+    end
+
+    test "rejects a period outside 1..nper or a non-integer period" do
+      assert Finance.TVM.ipmt(0.10 / 12, 13, 12, 1000) == {:error, :undefined}
+      assert Finance.TVM.ipmt(0.10 / 12, 0, 12, 1000) == {:error, :undefined}
+      assert Finance.TVM.ipmt(0.10 / 12, 1.5, 12, 1000) == {:error, :undefined}
+      assert Finance.TVM.ppmt(0.05, 1, 0, 1000) == {:error, :undefined}
+    end
+
+    test "bang variants return the bare value and raise on error" do
+      assert Finance.TVM.ipmt!(0.0, 3, 12, 1200) == 0.0
+      assert_raise ArgumentError, fn -> Finance.TVM.ppmt!(0.10 / 12, 13, 12, 1000) end
+    end
+  end
+
+  describe "Finance.Bonds" do
+    test "price and ytm are inverses" do
+      assert {:ok, price} = Finance.Bonds.price(1000, 0.08, 0.10, 10)
+      assert Finance.Bonds.ytm(1000, 0.08, price, 10) == {:ok, 0.1}
+    end
+
+    test "a par bond yields its coupon rate" do
+      assert Finance.Bonds.price(100, 0.05, 0.05, 10) == {:ok, 100.0}
+      assert Finance.Bonds.ytm(100, 0.05, 100.0, 10) == {:ok, 0.05}
+    end
+
+    test "degenerate maturity is undefined across the module" do
+      assert Finance.Bonds.price(100, 0.05, 0.05, 0) == {:error, :undefined}
+      assert Finance.Bonds.ytm(100, 0.05, 100.0, -1) == {:error, :undefined}
+      assert Finance.Bonds.duration(0.05, 0.05, 0) == {:error, :undefined}
+      assert Finance.Bonds.modified_duration(0.05, 0.05, 0) == {:error, :undefined}
+      assert Finance.Bonds.convexity(0.05, 0.05, 0) == {:error, :undefined}
+      # a fractional number of coupon periods is also undefined
+      assert Finance.Bonds.price(100, 0.05, 0.05, 2.5, 1) == {:error, :undefined}
+      assert Finance.Bonds.price(100, 0.05, 0.05, 10, 0) == {:error, :undefined}
+    end
+
+    test "ytm does not converge when no yield brackets the price" do
+      assert Finance.Bonds.ytm(100, 0.05, -50.0, 10) == {:error, :did_not_converge}
+    end
+
+    test "bang variants return bare values and raise on error" do
+      assert Finance.Bonds.price!(100, 0.05, 0.05, 10) == 100.0
+      assert Finance.Bonds.ytm!(100, 0.05, 100.0, 10) == 0.05
+      assert Finance.Bonds.duration!(0.0, 0.05, 10, 1) == 10.0
+      assert Finance.Bonds.modified_duration!(0.0, 0.05, 10, 1) == 9.52381
+      assert Finance.Bonds.convexity!(0.0, 0.05, 10, 1) == 99.773243
+      assert_raise ArgumentError, fn -> Finance.Bonds.price!(100, 0.05, 0.05, 0) end
+    end
+  end
+
+  property "ytm recovers the yield a bond was priced at" do
+    check all(
+            coupon_bp <- integer(0..1500),
+            yield_bp <- integer(100..1500),
+            years <- integer(1..30)
+          ) do
+      coupon = coupon_bp / 10_000
+      yield = yield_bp / 10_000
+      assert {:ok, price} = Finance.Bonds.price(1000, coupon, yield, years)
+      assert {:ok, recovered} = Finance.Bonds.ytm(1000, coupon, price, years)
+      assert_in_delta recovered, yield, 1.0e-3
+    end
+  end
+
+  describe "Finance.Rates" do
+    test "effective and nominal are inverses (Excel EFFECT/NOMINAL)" do
+      assert {:ok, ear} = Finance.Rates.effective_annual_rate(0.10, 12)
+      assert Float.round(ear, 6) == 0.104713
+      assert {:ok, nominal} = Finance.Rates.nominal_rate(ear, 12)
+      assert_in_delta nominal, 0.10, 1.0e-9
+    end
+
+    test "round-trips through any compounding frequency" do
+      assert {:ok, ear} = Finance.Rates.effective_annual_rate(0.08, 4)
+      assert {:ok, nominal} = Finance.Rates.nominal_rate(ear, 4)
+      assert_in_delta nominal, 0.08, 1.0e-9
+    end
+
+    test "continuous-to-periodic" do
+      assert {:ok, r} = Finance.Rates.continuous_to_periodic(0.10, 1)
+      assert Float.round(r, 6) == 0.105171
+    end
+
+    test "undefined for non-positive frequency or effective <= -1" do
+      assert Finance.Rates.effective_annual_rate(0.10, 0) == {:error, :undefined}
+      assert Finance.Rates.nominal_rate(0.10, 0) == {:error, :undefined}
+      assert Finance.Rates.nominal_rate(-1.5, 12) == {:error, :undefined}
+      assert Finance.Rates.continuous_to_periodic(0.1, 0) == {:error, :undefined}
+    end
+
+    test "bang variants" do
+      assert {:ok, r} = Finance.Rates.continuous_to_periodic(0.10, 1)
+      assert Finance.Rates.continuous_to_periodic!(0.10, 1) == r
+      assert {:ok, ear} = Finance.Rates.effective_annual_rate(0.10, 12)
+      assert Finance.Rates.nominal_rate!(ear, 12) == elem(Finance.Rates.nominal_rate(ear, 12), 1)
+      assert_raise ArgumentError, fn -> Finance.Rates.effective_annual_rate!(0.10, 0) end
+    end
+  end
+
+  describe "amortization_schedule/3,4" do
+    test "produces a full schedule that pays the loan off exactly" do
+      assert {:ok, rows} = Finance.TVM.amortization_schedule(0.10 / 12, 12, 1000)
+      assert length(rows) == 12
+      assert List.first(rows).period == 1
+      assert List.last(rows).balance == 0.0
+      assert_in_delta Enum.sum(Enum.map(rows, & &1.principal)), -1000.0, 1.0e-9
+    end
+
+    test "every row's interest and principal reconcile to its payment" do
+      assert {:ok, rows} = Finance.TVM.amortization_schedule(0.10 / 12, 12, 1000)
+
+      assert Enum.all?(rows, fn r ->
+               Float.round(r.interest + r.principal - r.payment, 2) == 0.0
+             end)
+
+      assert List.first(rows).interest == -8.33
+    end
+
+    test ":precision controls the rounding of each column" do
+      assert {:ok, rows} = Finance.TVM.amortization_schedule(0.10 / 12, 12, 1000, precision: 4)
+      assert List.first(rows).interest == -8.3333
+    end
+
+    test "at zero rate principal is spread evenly" do
+      assert {:ok, rows} = Finance.TVM.amortization_schedule(0.0, 4, 1000)
+      assert Enum.map(rows, & &1.principal) == [-250.0, -250.0, -250.0, -250.0]
+      assert List.last(rows).balance == 0.0
+    end
+
+    test "rejects a non-positive or non-integer term" do
+      assert Finance.TVM.amortization_schedule(0.05, 0, 1000) == {:error, :undefined}
+      assert Finance.TVM.amortization_schedule(0.05, 2.5, 1000) == {:error, :undefined}
+    end
+
+    test "bang variant returns the rows and raises on error" do
+      assert [%{period: 1} | _] = Finance.TVM.amortization_schedule!(0.10 / 12, 12, 1000)
+      assert_raise ArgumentError, fn -> Finance.TVM.amortization_schedule!(0.05, 0, 1000) end
+    end
+
+    test "computes in Decimal when given Decimal inputs" do
+      assert {:ok, rows} =
+               Finance.TVM.amortization_schedule(Decimal.new("0.05"), 3, Decimal.new("1000"))
+
+      assert length(rows) == 3
+      assert %Decimal{} = List.first(rows).payment
+      assert Decimal.equal?(List.last(rows).balance, 0)
+
+      total = Enum.reduce(rows, Decimal.new(0), fn r, acc -> Decimal.add(acc, r.principal) end)
+      assert Decimal.equal?(total, Decimal.new("-1000.00"))
+    end
+
+    test "the Decimal path accepts integer and float principals" do
+      assert {:ok, a} = Finance.TVM.amortization_schedule(Decimal.new("0.05"), 3, 1000)
+      assert {:ok, b} = Finance.TVM.amortization_schedule(Decimal.new("0.05"), 3, 1000.0)
+      assert Decimal.equal?(List.last(a).balance, 0)
+      assert Decimal.equal?(List.last(b).balance, 0)
+    end
+
+    test "the Decimal path handles a zero rate" do
+      assert {:ok, rows} =
+               Finance.TVM.amortization_schedule(Decimal.new("0"), 4, Decimal.new("1000"))
+
+      assert Enum.all?(rows, fn r -> Decimal.equal?(r.principal, Decimal.new("-250.00")) end)
+      assert Decimal.equal?(List.last(rows).balance, 0)
+    end
+  end
+
+  property "the principal portions repay the whole balance" do
+    check all(
+            rate_bp <- integer(1..2000),
+            nper <- integer(2..60),
+            pv <- integer(1_000..1_000_000)
+          ) do
+      rate = rate_bp / 10_000
+
+      total =
+        for(per <- 1..nper, do: elem(Finance.TVM.ppmt(rate, per, nper, pv), 1))
+        |> Enum.sum()
+
+      assert_in_delta total, -pv, 1.0e-4 * pv
     end
   end
 

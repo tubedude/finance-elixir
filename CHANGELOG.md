@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.3.0 — 2026-07-04
+
+### Added
+- `Finance.TVM.ipmt/6` and `ppmt/6` — the interest and principal portions of a
+  given period's payment; together they add up to `pmt/5`.
+- `Finance.TVM.amortization_schedule/3,4` — the full repayment schedule as a list
+  of `%{period, payment, interest, principal, balance}` rows, with the final row
+  absorbing rounding so the balance ends at exactly `0`. Computed in integer minor
+  units (10^`:precision`), so every row is exact to the requested precision;
+  returns `Decimal` rows when given `Decimal` inputs, floats otherwise.
+- `Finance.Rates` — `effective_annual_rate/2`, `nominal_rate/2`, and
+  `continuous_to_periodic/2` for converting between rate quotations.
+- `Finance.Bonds` — fixed income: `price/5`, `ytm/5` (reuses the `Finance.Solver`
+  seam, mirroring `TVM.rate`), `duration/4` (Macaulay), `modified_duration/4`,
+  and `convexity/4`, each with a `!` variant. Maturity is given in years with a
+  configurable coupon frequency (`freq`, default `2`); settlement is assumed to
+  fall on a coupon date (clean price, no accrued interest).
+
 ## 1.2.0 — 2026-07-04
 
 Reorganised the flat `Finance` module into domain modules. **No behaviour
