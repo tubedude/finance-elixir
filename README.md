@@ -14,7 +14,7 @@ have that optional dependency installed.
 The functions are organised into domain modules:
 
 - `Finance.CashFlow` — net present value and internal rate of return
-  (`npv`, `xnpv`, `irr`, `xirr`, `mirr`).
+  (`npv`, `xnpv`, `irr`, `xirr`, `mirr`), plus batched `irr_many`/`xirr_many`.
 - `Finance.TVM` — time-value-of-money scalars (`pv`, `fv`, `pmt`, `ipmt`, `ppmt`,
   `nper`, `rate`) plus `amortization_schedule`.
 - `Finance.Rates` — rate conversions (`effective_annual_rate`, `nominal_rate`,
@@ -42,7 +42,7 @@ Add `finance` to your dependencies in `mix.exs`:
 
 ```elixir
 def deps do
-  [{:finance, "~> 1.0"}]
+  [{:finance, "~> 1.5"}]
 end
 ```
 
