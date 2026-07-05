@@ -74,8 +74,13 @@ defmodule Finance.Shared do
   @doc "Net present value of normalized flows at `rate`: `Σ amount / (1 + rate)^t`."
   @spec present_value([{number, number}], number) :: float
   def present_value(flows, rate) do
+    # Discount with a negative exponent — `amount * (1 + rate)^-t` — rather than
+    # dividing by `(1 + rate)^t`. At a high rate over a long horizon the factor
+    # underflows to 0 (a negligible term, correctly ~0); the divide form would
+    # instead overflow the denominator, and Erlang's `:math.pow` raises on
+    # overflow, which would abort the whole solve.
     Enum.reduce(flows, 0.0, fn {t, amount}, acc ->
-      acc + amount / :math.pow(1 + rate, t)
+      acc + amount * :math.pow(1 + rate, -t)
     end)
   end
 end

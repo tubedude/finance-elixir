@@ -274,6 +274,15 @@ defmodule FinanceTest do
       assert {:ok, rate} = Finance.TVM.rate(471, -1, pv, 0.0, 0, precision: 10)
       assert_in_delta rate, 0.011, 1.0e-6
     end
+
+    test "converges over very long horizons where a high-rate probe would overflow" do
+      # Bracketing probes the NPV at rate 1.0; over 2000 periods `2^2000` overflows.
+      # Discounting with a negative exponent underflows to 0 there instead of
+      # raising, so the solve still finds the (small) root.
+      {:ok, pv} = Finance.TVM.pv(0.002, 2000, -1, 0.0, 0)
+      assert {:ok, rate} = Finance.TVM.rate(2000, -1, pv, 0.0, 0, precision: 10)
+      assert_in_delta rate, 0.002, 1.0e-6
+    end
   end
 
   describe "xnpv/2" do

@@ -10,6 +10,14 @@
   use `is_struct(value, Decimal)` guards (runtime, no compile-time module needed),
   so the Decimal support is genuinely optional. Behaviour with `decimal` present
   is unchanged.
+- The solver now converges over very long horizons that a high-rate probe would
+  overflow. Bracketing evaluates the NPV at rate `1.0`, where `(1 + 1)^t`
+  overflows once `t` is large (e.g. a 2000-period flow) — and Erlang's
+  `:math.pow` raises on overflow, which aborted the whole solve to
+  `:did_not_converge`. `present_value` and the solver's derivative now discount
+  with a negative exponent (`amount * (1 + rate)^-t`), so the factor underflows
+  to a negligible `0` instead of overflowing. Results for normal flows are
+  unchanged.
 
 ## 1.4.3 — 2026-07-05
 
