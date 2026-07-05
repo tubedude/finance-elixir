@@ -214,9 +214,10 @@ defmodule Finance.TVM do
   Each monetary column is rounded to `:precision` places, which defaults to `2`
   (cents) rather than the `6` used elsewhere, since a schedule is a money table.
 
-  If `rate` or `pv` is a `Decimal`, the whole schedule is computed in `Decimal`
-  and every monetary field comes back as a `Decimal` — exact to the cent, which
-  matters when the rounding compounds over hundreds of periods.
+  The schedule is computed in integer minor units (10^`:precision`), so every
+  row is exact to the requested precision and the balance ends at exactly zero.
+  If `rate` or `pv` is a `Decimal`, the monetary fields come back as `Decimal`;
+  otherwise they come back as floats.
 
       iex> {:ok, [first | _]} = Finance.TVM.amortization_schedule(0.10 / 12, 12, 1000)
       iex> {first.payment, first.interest, first.principal, first.balance}
@@ -252,104 +253,63 @@ defmodule Finance.TVM do
     rate |> amortization_schedule(nper, pv, opts) |> unwrap!()
   end
 
+  # Compute the schedule once in integer minor units (10^precision, e.g. cents at
+  # precision 2). Money is then exact and only the interest (balance × rate) ever
+  # needs rounding — everything else is integer add/subtract. The rows are
+  # converted back to floats, or to `Decimal` when the inputs were `Decimal`.
+  # This is exact to the requested precision and faster than working in either
+  # floats or `Decimal`.
   defp build_schedule(rate, nper, pv, precision) do
-    if is_struct(rate, Decimal) or is_struct(pv, Decimal) do
-      build_decimal_schedule(to_decimal(rate), nper, to_decimal(pv), precision)
-    else
-      build_float_schedule(rate, nper, pv, precision)
-    end
-  end
-
-  defp build_float_schedule(rate, nper, pv, precision) do
+    decimal? = is_struct(rate, Decimal) or is_struct(pv, Decimal)
+    scale = Integer.pow(10, precision)
+    rate = to_float(rate)
+    pv = to_float(pv)
     {:ok, payment} = pmt(rate, nper, pv)
-    payment = float_round(payment, precision)
 
-    schedule(1..nper, pv, fn period, balance ->
-      interest = float_round(-balance * rate, precision)
-      principal = float_principal(period, nper, balance, payment, interest, precision)
-      new_balance = float_round(balance + principal, precision)
-
-      row_payment =
-        if period == nper, do: float_round(interest + principal, precision), else: payment
-
-      {row_payment, interest, principal, new_balance}
-    end)
+    rows = integer_schedule(rate, nper, round(pv * scale), round(payment * scale))
+    converter = if decimal?, do: &row_to_decimal(&1, scale), else: &row_to_float(&1, scale)
+    Enum.map(rows, converter)
   end
 
-  defp float_principal(nper, nper, balance, _payment, _interest, precision),
-    do: float_round(-balance, precision)
-
-  defp float_principal(_period, _nper, _payment, payment, interest, precision),
-    do: float_round(payment - interest, precision)
-
-  # `+ 0.0` collapses a floating-point negative zero to `0.0`.
-  defp float_round(value, precision), do: Float.round(value, precision) + 0.0
-
-  defp build_decimal_schedule(rate, nper, pv, precision) do
-    payment = rate |> decimal_pmt(nper, pv) |> decimal_round(precision)
-
-    schedule(1..nper, pv, fn period, balance ->
-      interest = Decimal.mult(balance, rate) |> Decimal.mult(-1) |> decimal_round(precision)
-      principal = decimal_principal(period, nper, balance, payment, interest, precision)
-      new_balance = Decimal.add(balance, principal) |> decimal_round(precision)
-
-      row_payment =
-        if period == nper,
-          do: Decimal.add(interest, principal) |> decimal_round(precision),
-          else: payment
-
-      {row_payment, interest, principal, new_balance}
-    end)
-  end
-
-  defp decimal_principal(nper, nper, balance, _payment, _interest, precision),
-    do: balance |> Decimal.mult(-1) |> decimal_round(precision)
-
-  defp decimal_principal(_period, _nper, _balance, payment, interest, precision),
-    do: Decimal.sub(payment, interest) |> decimal_round(precision)
-
-  # `pmt` for a plain loan (fv 0, ordinary annuity), in Decimal.
-  defp decimal_pmt(rate, nper, pv) do
-    if Decimal.equal?(rate, 0) do
-      Decimal.div(Decimal.mult(pv, -1), Decimal.new(nper))
-    else
-      growth = dec_pow(Decimal.add(1, rate), nper)
-      numerator = pv |> Decimal.mult(growth) |> Decimal.mult(rate) |> Decimal.mult(-1)
-      Decimal.div(numerator, Decimal.sub(growth, 1))
-    end
-  end
-
-  # (base)^n for a whole number n >= 1, by repeated multiplication (Decimal has no pow).
-  defp dec_pow(base, n) when n >= 1 do
-    Enum.reduce(1..n, Decimal.new(1), fn _, acc -> Decimal.mult(acc, base) end)
-  end
-
-  defp decimal_round(value, precision), do: Decimal.round(value, precision)
-
-  defp to_decimal(%Decimal{} = value), do: value
-  defp to_decimal(value) when is_integer(value), do: Decimal.new(value)
-  defp to_decimal(value) when is_float(value), do: Decimal.from_float(value)
-
-  # Walk the periods carrying a running balance; `fun` returns the four monetary
-  # fields for the row. Shared by the float and Decimal builders.
-  defp schedule(periods, opening_balance, fun) do
+  # Running balance in integer minor units; the final row pays off whatever
+  # remains, so the balance ends at exactly 0.
+  defp integer_schedule(rate, nper, opening, payment) do
     {rows, _balance} =
-      Enum.map_reduce(periods, opening_balance, fn period, balance ->
-        {payment, interest, principal, new_balance} = fun.(period, balance)
-
-        row = %{
-          period: period,
-          payment: payment,
-          interest: interest,
-          principal: principal,
-          balance: new_balance
-        }
-
-        {row, new_balance}
+      Enum.map_reduce(1..nper, opening, fn period, balance ->
+        interest = round(-balance * rate)
+        principal = if period == nper, do: -balance, else: payment - interest
+        new_balance = balance + principal
+        row_payment = if period == nper, do: interest + principal, else: payment
+        {{period, row_payment, interest, principal, new_balance}, new_balance}
       end)
 
     rows
   end
+
+  defp row_to_float({period, payment, interest, principal, balance}, scale) do
+    %{
+      period: period,
+      payment: payment / scale,
+      interest: interest / scale,
+      principal: principal / scale,
+      balance: balance / scale
+    }
+  end
+
+  defp row_to_decimal({period, payment, interest, principal, balance}, scale) do
+    %{
+      period: period,
+      payment: units_to_decimal(payment, scale),
+      interest: units_to_decimal(interest, scale),
+      principal: units_to_decimal(principal, scale),
+      balance: units_to_decimal(balance, scale)
+    }
+  end
+
+  defp units_to_decimal(units, scale), do: Decimal.div(Decimal.new(units), scale)
+
+  defp to_float(%Decimal{} = value), do: Decimal.to_float(value)
+  defp to_float(value) when is_number(value), do: value * 1.0
 
   @doc """
   Works out how many periods it takes for payments of `pmt` to pay off a present
