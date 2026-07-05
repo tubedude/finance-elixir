@@ -49,8 +49,9 @@ defmodule Finance.Solver.Brent do
   defp zbrent(flows, opts) do
     tol = Keyword.fetch!(opts, :tolerance)
     max_iterations = Keyword.fetch!(opts, :max_iterations)
+    guess = Keyword.fetch!(opts, :guess)
 
-    case Finance.Shared.bracket(flows) do
+    case Finance.Shared.bracket(flows, guess) do
       {:ok, a, b} ->
         fa = present_value(flows, a)
         fb = present_value(flows, b)

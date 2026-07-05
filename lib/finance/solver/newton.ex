@@ -12,6 +12,11 @@ defmodule Finance.Solver.Newton do
   Because the maintained bracket always encloses a sign change, the result is a
   genuine root rather than a stalled non-root, and a long-dated flow whose raw
   Newton step would overflow simply takes a bisection step instead.
+
+  Bracketing scans the interior of the rate domain rather than only its extremes,
+  so it finds a root even when the NPV crosses zero an even number of times (a
+  series with more than one IRR). When several roots exist it brackets the one
+  nearest `:guess`, matching what a guess-driven spreadsheet `XIRR` returns.
   """
 
   @behaviour Finance.Solver
@@ -47,7 +52,7 @@ defmodule Finance.Solver.Newton do
   # Bracket a sign change, then run the safeguarded iteration from `guess` (when it
   # falls inside the bracket) or the midpoint.
   defp rtsafe(flows, guess, tol, max_iterations) do
-    case Finance.Shared.bracket(flows) do
+    case Finance.Shared.bracket(flows, guess) do
       {:ok, a, b} ->
         bracket = orient(flows, a, b)
         x = if guess > a and guess < b, do: guess, else: (a + b) / 2

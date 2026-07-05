@@ -8,7 +8,8 @@ defmodule Finance.Shared do
                     guess: [
                       type: :float,
                       default: 0.1,
-                      doc: "initial rate for the Newton-Raphson solver"
+                      doc:
+                        "initial rate for the solver; for a series with more than one rate, selects the one nearest the guess"
                     ],
                     tolerance: [
                       type: :float,
@@ -103,12 +104,59 @@ defmodule Finance.Shared do
     end)
   end
 
+  # Grid for the bracket scan: grow `1 + rate` by 5% per step, up to a rate of 1e7.
+  @scan_ratio 1.05
+  @scan_cap 1.0e7
+
   @doc false
-  # Bracket a sign change for the solvers: `{:ok, low, high}` with the NPV changing
-  # sign across `[low, high]`, or `:diverged` when none is found.
-  def bracket(flows) do
+  # Bracket a sign change for the solvers. Walk a geometric grid of rates outward
+  # from the floor; among every adjacent-sample pair whose NPV changes sign, keep
+  # the interval whose nearer edge sits closest to `guess`. Returns
+  # `{:ok, low, high}` around that root, or `:diverged` when the NPV never crosses
+  # zero.
+  #
+  # Sampling the interior — rather than comparing only the two extremes — finds a
+  # root even when the curve crosses zero an even number of times and both extremes
+  # share a sign (a series with more than one IRR). Anchoring the choice to `guess`
+  # then selects, among several roots, the one a guess-driven solver would land on,
+  # matching spreadsheet `XIRR`.
+  def bracket(flows, guess) do
     low = safe_low(flows)
-    expand(flows, low, present_value(flows, low), 1.0)
+    scan(flows, guess, low, present_value(flows, low), grid_step(low), nil)
+  end
+
+  # Next rate on the geometric grid. Growing `1 + rate` keeps the step fine near
+  # the -100% floor and coarser as the rate climbs.
+  defp grid_step(rate), do: (1.0 + rate) * @scan_ratio - 1.0
+
+  defp scan(_flows, _guess, _prev, _f_prev, rate, best) when rate > @scan_cap, do: finalize(best)
+
+  defp scan(flows, guess, prev, f_prev, rate, best) do
+    f = present_value(flows, rate)
+    crossed? = straddles_zero?(f_prev, f)
+    best = if crossed?, do: closer(best, {prev, rate}, guess), else: best
+
+    # Stop once a sign change is found entirely above the guess: it is the nearest
+    # interval above, `best` already holds the nearest at or below, and everything
+    # further out is farther still.
+    if crossed? and prev >= guess,
+      do: finalize(best),
+      else: scan(flows, guess, rate, f, grid_step(rate), best)
+  end
+
+  defp finalize(nil), do: :diverged
+  defp finalize({low, high}), do: {:ok, low, high}
+
+  # Keep whichever candidate interval sits nearer `guess`; an interval that
+  # contains the guess wins outright.
+  defp closer(nil, interval, _guess), do: interval
+
+  defp closer(best, interval, guess) do
+    if distance(interval, guess) < distance(best, guess), do: interval, else: best
+  end
+
+  defp distance({low, high}, guess) do
+    if low <= guess and guess <= high, do: 0.0, else: min(abs(low - guess), abs(high - guess))
   end
 
   # The bracket's floor. As `rate` nears -1, `(1 + rate)^t` underflows to zero for
@@ -117,15 +165,6 @@ defmodule Finance.Shared do
   defp safe_low(flows) do
     max_t = Enum.reduce(flows, 1.0, fn {t, _amount}, acc -> max(t, acc) end)
     max(:math.pow(1.0e-290, 1 / max_t), 1.0e-6) - 1.0
-  end
-
-  # Expand the upper bound until the NPV changes sign against `f_low`.
-  defp expand(_flows, _low, _f_low, high) when high > 1.0e7, do: :diverged
-
-  defp expand(flows, low, f_low, high) do
-    if straddles_zero?(f_low, present_value(flows, high)),
-      do: {:ok, low, high},
-      else: expand(flows, low, f_low, high * 2 + 1)
   end
 
   # Whether `a` and `b` sit on opposite sides of zero. Comparing signs rather than

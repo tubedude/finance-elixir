@@ -11,6 +11,21 @@
   on short series, so it remains the default; select Brent with
   `solver: Finance.Solver.Brent` or `config :finance, solver: Finance.Solver.Brent`.
 
+### Fixed
+- The rate solvers now find a root when the NPV crosses zero an even number of
+  times. Bracketing compared only the two ends of the rate domain, so a series
+  with more than one IRR — where both ends share a sign — reported
+  `{:error, :did_not_converge}` even though a real rate existed (for example the
+  numpy-financial #39 series, which has IRRs near -1.8% and 12%). The bracket now
+  scans the interior of the domain, not just its extremes.
+
+### Changed
+- For a series with more than one rate, the solver returns the one nearest
+  `:guess` (default `0.1`), so a multi-IRR series resolves to the rate a
+  guess-driven spreadsheet `XIRR` would return rather than always the lowest.
+  Single-rate series are unaffected. Both `Finance.Solver.Newton` and
+  `Finance.Solver.Brent` share the bracket, so both select the same root.
+
 ## 1.5.1 — 2026-07-05
 
 ### Added
