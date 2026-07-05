@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.4.1 — 2026-07-05
+
+### Fixed
+- The solver now converges for long-maturity, low-rate flows — for example the
+  `ytm` of a deep-discount 28-year bond, or a 30-year monthly amortization
+  `rate`. Previously a Newton step could overflow on such flows and abort the
+  whole solve instead of falling through to bisection, and the bisection bracket
+  itself overflowed for long-dated flows. Now a Newton overflow falls through to
+  bisection, the bracket floor adapts to the longest flow, and the bracketing
+  sign check compares signs instead of multiplying (which could overflow).
+
 ## 1.4.0 — 2026-07-04
 
 ### Added

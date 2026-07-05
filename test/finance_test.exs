@@ -685,6 +685,19 @@ defmodule FinanceTest do
       assert Finance.Bonds.ytm(100, 0.05, -50.0, 10) == {:error, :did_not_converge}
     end
 
+    test "ytm converges for long-maturity, low-yield bonds (solver overflow fallback)" do
+      # Newton overshoots into an overflow on these long-dated flows; the solver
+      # must fall through to bisection rather than give up. Regression for a
+      # deep-discount 28-year semiannual bond and a 30-year monthly bond.
+      {:ok, price} = Finance.Bonds.price(1000, 0.0097, 0.0233, 28)
+      assert {:ok, recovered} = Finance.Bonds.ytm(1000, 0.0097, price, 28)
+      assert_in_delta recovered, 0.0233, 1.0e-4
+
+      {:ok, monthly} = Finance.Bonds.price(1000, 0.01, 0.02, 30, 12)
+      assert {:ok, monthly_yield} = Finance.Bonds.ytm(1000, 0.01, monthly, 30, 12)
+      assert_in_delta monthly_yield, 0.02, 1.0e-3
+    end
+
     test "bang variants return bare values and raise on error" do
       assert Finance.Bonds.price!(100, 0.05, 0.05, 10) == 100.0
       assert Finance.Bonds.ytm!(100, 0.05, 100.0, 10) == 0.05
