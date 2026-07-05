@@ -153,4 +153,4 @@ mix credo --strict
 mix dialyzer
 ```
 
-See [CHANGELOG.md](CHANGELOG.md) for the 1.0 rewrite notes.
+See [CHANGELOG.md](CHANGELOG.md) for the release history.
