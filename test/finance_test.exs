@@ -514,6 +514,65 @@ defmodule FinanceTest do
     end
   end
 
+  describe "Finance.Returns metrics" do
+    test "cagr" do
+      assert Finance.Returns.cagr(1000, 2000, 10) == {:ok, 0.071773}
+      assert Finance.Returns.cagr(1000, 1000, 5) == {:ok, 0.0}
+      assert Finance.Returns.cagr(-1000, 2000, 10) == {:error, :undefined}
+      assert Finance.Returns.cagr(1000, 2000, 0) == {:error, :undefined}
+      assert Finance.Returns.cagr(1000, -2000, 10) == {:error, :undefined}
+      assert Finance.Returns.cagr!(1000, 2000, 10) == 0.071773
+      assert_raise ArgumentError, fn -> Finance.Returns.cagr!(1000, 2000, 0) end
+    end
+
+    test "payback_period interpolates and reports undefined/empty" do
+      assert Finance.Returns.payback_period([-1000, 500, 500, 500]) == {:ok, 2.0}
+      assert Finance.Returns.payback_period([-1000, 400, 400, 400]) == {:ok, 2.5}
+      assert Finance.Returns.payback_period([-1000, 100, 100]) == {:error, :undefined}
+      assert Finance.Returns.payback_period([1000, 400]) == {:error, :undefined}
+      assert Finance.Returns.payback_period([]) == {:error, :insufficient_data}
+      assert Finance.Returns.payback_period!([-1000, 400, 400, 400]) == 2.5
+    end
+
+    test "discounted_payback_period" do
+      assert Finance.Returns.discounted_payback_period([-1000, 600, 600, 600], 0.1) ==
+               {:ok, 1.916667}
+
+      # at rate 0 it matches the plain payback
+      assert Finance.Returns.discounted_payback_period([-1000, 600, 600, 600], 0.0) ==
+               Finance.Returns.payback_period([-1000, 600, 600, 600])
+
+      assert Finance.Returns.discounted_payback_period([-1000, 100, 100], 0.1) ==
+               {:error, :undefined}
+
+      assert Finance.Returns.discounted_payback_period!([-1000, 600, 600, 600], 0.1) == 1.916667
+    end
+
+    test "profitability_index reuses npv" do
+      assert Finance.Returns.profitability_index([-1000, 600, 600], 0.1) == {:ok, 1.041322}
+      assert Finance.Returns.profitability_index([-1000, 1100], 0.1) == {:ok, 1.0}
+      assert Finance.Returns.profitability_index([1000, 600], 0.1) == {:error, :undefined}
+      assert Finance.Returns.profitability_index([], 0.1) == {:error, :insufficient_data}
+      assert Finance.Returns.profitability_index!([-1000, 600, 600], 0.1) == 1.041322
+    end
+
+    test "twr links returns geometrically, optionally annualised" do
+      assert Finance.Returns.twr([0.10, -0.05, 0.08]) == {:ok, 0.1286}
+      assert Finance.Returns.twr([0.0, 0.0]) == {:ok, 0.0}
+      assert Finance.Returns.twr([0.02, 0.02], periods_per_year: 4) == {:ok, 0.082432}
+      assert Finance.Returns.twr([]) == {:error, :insufficient_data}
+      assert Finance.Returns.twr([0.1, "x"]) == {:error, :undefined}
+      assert Finance.Returns.twr!([0.10, -0.05, 0.08]) == 0.1286
+      assert_raise ArgumentError, fn -> Finance.Returns.twr!([]) end
+    end
+
+    test "an unknown option raises" do
+      assert_raise NimbleOptions.ValidationError, fn ->
+        Finance.Returns.cagr(1000, 2000, 10, precison: 2)
+      end
+    end
+  end
+
   describe "volatility" do
     test "annualises the standard deviation of simple returns" do
       assert Finance.Returns.volatility([100, 102, 101, 103, 105]) == {:ok, 0.234528}

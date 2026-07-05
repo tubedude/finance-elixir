@@ -32,7 +32,7 @@ defmodule Finance.Depreciation do
     end
   end
 
-  @doc "Same as `sln/3`, but hands back the value on its own and raises `ArgumentError` if the calculation fails."
+  @doc "Same as `sln/3`, but returns the value directly and raises `ArgumentError` on error."
   @spec sln!(number, number, number) :: float
   def sln!(cost, salvage, life), do: cost |> sln(salvage, life) |> unwrap!()
 
@@ -61,7 +61,7 @@ defmodule Finance.Depreciation do
     end
   end
 
-  @doc "Same as `syd/4`, but hands back the value on its own and raises `ArgumentError` if the calculation fails."
+  @doc "Same as `syd/4`, but returns the value directly and raises `ArgumentError` on error."
   @spec syd!(number, number, number, number) :: float
   def syd!(cost, salvage, life, period), do: cost |> syd(salvage, life, period) |> unwrap!()
 
@@ -97,7 +97,7 @@ defmodule Finance.Depreciation do
     life > 0 and factor > 0 and period == n and n >= 1 and n <= life
   end
 
-  @doc "Same as `ddb/5`, but hands back the value on its own and raises `ArgumentError` if the calculation fails."
+  @doc "Same as `ddb/5`, but returns the value directly and raises `ArgumentError` on error."
   @spec ddb!(number, number, number, number, number) :: float
   def ddb!(cost, salvage, life, period, factor \\ 2) do
     cost |> ddb(salvage, life, period, factor) |> unwrap!()
@@ -132,7 +132,7 @@ defmodule Finance.Depreciation do
     end
   end
 
-  @doc "Same as `db/5`, but hands back the value on its own and raises `ArgumentError` if the calculation fails."
+  @doc "Same as `db/5`, but returns the value directly and raises `ArgumentError` on error."
   @spec db!(number, number, number, number, number) :: float
   def db!(cost, salvage, life, period, month \\ 12) do
     cost |> db(salvage, life, period, month) |> unwrap!()
