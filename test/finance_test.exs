@@ -283,12 +283,125 @@ defmodule FinanceTest do
     end
 
     test "converges over very long horizons where a high-rate probe would overflow" do
-      # Bracketing probes the NPV at rate 1.0; over 2000 periods `2^2000` overflows.
-      # Discounting with a negative exponent underflows to 0 there instead of
-      # raising, so the solve still finds the (small) root.
+      # The bracket scan samples rates out to a large cap; over 2000 periods a
+      # high-rate `(1 + rate)^-t` underflows to 0 instead of raising, so the scan
+      # completes and the solve finds the (small) root.
       {:ok, pv} = Finance.TVM.pv(0.002, 2000, -1, 0.0, 0)
       assert {:ok, rate} = Finance.TVM.rate(2000, -1, pv, 0.0, 0, precision: 10)
       assert_in_delta rate, 0.002, 1.0e-6
+    end
+
+    test "finds a root when the NPV crosses zero an even number of times" do
+      # numpy-financial #39: two big outflows then declining inflows that turn back
+      # to outflows gives two IRRs (~-1.8% and ~12%), and the NPV is negative at
+      # both ends of the domain. Comparing only the extremes misses the crossing
+      # (the pre-scan solver returned :did_not_converge); the interior scan finds
+      # it, and the default guess (0.1) selects the 12% root, as spreadsheets do.
+      series = [
+        -217_500.0,
+        -217_500.0,
+        108_466.80462450592,
+        101_129.96439328062,
+        93_793.12416205535,
+        86_456.28393083003,
+        79_119.44369960476,
+        71_782.60346837944,
+        64_445.76323715414,
+        57_108.92300592884,
+        49_772.08277470355,
+        42_435.24254347826,
+        35_098.40231225296,
+        27_761.56208102766,
+        20_424.721849802358,
+        13_087.88161857707,
+        5_751.041387351768,
+        -1_585.7988438735192,
+        -8_922.639075098821,
+        -16_259.479306324123,
+        -23_596.31953754941,
+        -30_933.159768774713,
+        -38_270.0,
+        -45_606.8402312253,
+        -52_943.680462450604,
+        -60_280.520693675906,
+        -67_617.36092490121
+      ]
+
+      assert {:ok, rate} = Finance.CashFlow.irr(series)
+      assert_in_delta rate, 0.12, 1.0e-4
+    end
+
+    test "the guess selects which root of a multi-IRR series is returned" do
+      # The textbook double-IRR series has roots at 25% and 400%. The default guess
+      # lands on the near root; a guess out by the far root selects it. This is the
+      # deliberate consequence of anchoring root selection to the guess.
+      assert Finance.CashFlow.irr([-1600, 10_000, -10_000]) == {:ok, 0.25}
+      assert Finance.CashFlow.irr([-1600, 10_000, -10_000], guess: 3.0) == {:ok, 4.0}
+    end
+
+    test "a multi-IRR series returns the root nearest the guess (numpy-financial #28)" do
+      # Roots at ~-76.9% and ~185%; the default guess (0.1) is nearer the low root,
+      # so that is returned — a genuine multi-root series has no single right answer,
+      # and this choice is guess-driven, not a defect.
+      assert Finance.CashFlow.irr([-50, -100, 600, 300, -100]) == {:ok, -0.768895}
+    end
+
+    test "a guess far outside the bracket still converges via the interior scan" do
+      # guess: -5.0 sits below the -100% floor; the scan still brackets the root and
+      # the solver reaches it from the midpoint.
+      assert Finance.CashFlow.irr([-1000, 1100], guess: -5.0) == {:ok, 0.1}
+    end
+  end
+
+  describe "real-world regression cash flows" do
+    # Series that broke other XIRR/IRR implementations but that finance-elixir
+    # resolves; pinned here so a future solver change can't silently regress them.
+
+    test "converges where node xirr's bare Newton failed (nodejs-xirr #2)" do
+      flows = [{{2018, 1, 21}, 2839.20}, {{2018, 1, 24}, 207.70}, {{2018, 4, 26}, -2526.00}]
+      assert Finance.CashFlow.xirr(flows) == {:ok, -0.514174}
+    end
+
+    test "56-year horizon (Ruby finance gem #27, case 2)" do
+      # The Ruby gem returned a nonsense ~-1e13 rate here.
+      flows = [{{1957, 1, 1}, -1000}, {{2013, 1, 1}, 390_000}]
+      assert Finance.CashFlow.xirr(flows) == {:ok, 0.112339}
+    end
+
+    test "23-year horizon (Ruby finance gem #27, case 1)" do
+      # The Ruby gem raised "failed to reduce function values" here.
+      flows = [{{1990, 1, 1}, -1000}, {{2013, 1, 1}, 390_000}]
+      assert Finance.CashFlow.xirr(flows) == {:ok, 0.295909}
+    end
+
+    test "negative-base crash class (peliot XIRR-and-XNPV #4)" do
+      # Other implementations crashed raising `(1 + rate)` to a fractional power at a
+      # negative rate; the bracket floor keeps `1 + rate > 0`, so this can't happen.
+      flows = [{{2014, 2, 27}, -4000.0}, {{2015, 3, 6}, 2050.2}]
+      assert Finance.CashFlow.xirr(flows) == {:ok, -0.480963}
+    end
+
+    test "a zero final flow is a single-signed series, not a -100% total loss" do
+      # Excel can't produce an exact -100% either; a 0 payout is neither positive nor
+      # negative, so the series has one sign. This is intentional, not java-xirr's
+      # special-cased -1.0 convention.
+      flows = [{{2020, 1, 1}, -1000}, {{2021, 1, 1}, 0}]
+      assert Finance.CashFlow.xirr(flows) == {:error, :single_signed_flow}
+    end
+
+    test "all flows on one date is insufficient data" do
+      flows = [{{2020, 1, 1}, -1000}, {{2020, 1, 1}, 1200}]
+      assert Finance.CashFlow.xirr(flows) == {:error, :insufficient_data}
+    end
+
+    test "the Actual/365 basis shows the documented leap-year quirk" do
+      # 2020-01-01 to 2021-01-01 spans a leap year: 366 days over a 365-day basis, so
+      # a 10% gross return solves to slightly under 0.1 — the Microsoft-documented
+      # XIRR leap-year behaviour, not 0.1 exactly.
+      leap = Finance.CashFlow.xirr([{{2020, 1, 1}, -1000}, {{2021, 1, 1}, 1100}])
+      assert leap == {:ok, 0.099714}
+      # The same return over a non-leap year (365 days) lands on 0.1 exactly.
+      assert Finance.CashFlow.xirr([{{2021, 1, 1}, -1000}, {{2022, 1, 1}, 1100}]) == {:ok, 0.1}
     end
   end
 
@@ -302,6 +415,18 @@ defmodule FinanceTest do
 
       assert Finance.CashFlow.irr([-1000, 500, 500, 300], solver: Finance.Solver.Brent) ==
                {:ok, 0.156579}
+    end
+
+    test "selects the same guess-anchored root as the default on a multi-IRR series" do
+      # Both solvers share the interior-scan bracket, so Brent lands on the same root.
+      assert Finance.CashFlow.irr([-1600, 10_000, -10_000], solver: Finance.Solver.Brent) ==
+               {:ok, 0.25}
+
+      assert Finance.CashFlow.irr([-1600, 10_000, -10_000],
+               guess: 3.0,
+               solver: Finance.Solver.Brent
+             ) ==
+               {:ok, 4.0}
     end
 
     test "matches the default solver across a spread of loans, including long/steep" do
