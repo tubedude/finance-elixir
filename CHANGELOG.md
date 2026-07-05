@@ -1,6 +1,20 @@
 # Changelog
 
-## 1.4.4 — 2026-07-05
+## 1.5.0 — 2026-07-05
+
+### Added
+- `Finance.CashFlow.irr_many/2` and `xirr_many/2` — solve a whole batch of
+  independent series in one call, returning a list of `{:ok, rate}` /
+  `{:error, reason}` in the same order (one bad series doesn't sink the batch).
+  They run on the configured solver: the default pure-Elixir solver parallelizes
+  across schedulers with `Task.async_stream`, while a native (Rustler) or Nx
+  backend can run the whole batch in a single call.
+- `Finance.Solver` gains a `solve_many/2` callback for that batch seam.
+
+### Changed
+- Custom `Finance.Solver` implementations must now provide `solve_many/2`
+  alongside `solve/2`. The shipped `Finance.Solver.Newton` implements it (the
+  parallel default), so the built-in behaviour is unchanged.
 
 ### Fixed
 - `finance` now compiles when the optional `decimal` dependency is absent.

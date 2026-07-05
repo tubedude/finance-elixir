@@ -102,6 +102,31 @@ defmodule Finance.CashFlow do
   @spec xirr!([cash_flow] | [date], [option] | [amount]) :: rate
   def xirr!(first, second), do: first |> xirr(second) |> unwrap!()
 
+  @doc """
+  Finds the XIRR of many independent series at once — `xirr/1` for a whole
+  portfolio. Each element is its own list of `{date, amount}` flows, and the
+  result is a list of `{:ok, rate}` / `{:error, reason}` in the same order (one
+  bad series doesn't sink the batch).
+
+  The work runs on the configured solver (see `Finance.Solver`): the default
+  pure-Elixir solver parallelizes across schedulers, while a native backend
+  (a Rustler or Nx solver) runs the whole batch in one call.
+
+      iex> Finance.CashFlow.xirr_many([
+      ...>   [{~D[2019-01-01], -1000}, {~D[2020-01-01], 1100}],
+      ...>   [{~D[2019-01-01], -1000}, {~D[2020-01-01], 1200}]
+      ...> ])
+      [{:ok, 0.1}, {:ok, 0.2}]
+  """
+  @spec xirr_many([[cash_flow]], [option]) :: [{:ok, rate} | {:error, error}]
+  def xirr_many(series, opts \\ []) when is_list(series) and is_list(opts) do
+    opts = options(opts)
+
+    series
+    |> Enum.map(&prepare_dated/1)
+    |> solve_batch(opts)
+  end
+
   # === XNPV — net present value of dated flows =============================
 
   @doc """
@@ -181,6 +206,26 @@ defmodule Finance.CashFlow do
   @doc "Same as `irr/1`, but returns the rate directly and raises `ArgumentError` on error."
   @spec irr!([amount], [option]) :: rate
   def irr!(amounts, opts \\ []), do: amounts |> irr(opts) |> unwrap!()
+
+  @doc """
+  Finds the IRR of many independent series at once — `irr/1` for a whole batch.
+  Each element is its own list of amounts at periods `0, 1, 2, …`, and the result
+  is a list of `{:ok, rate}` / `{:error, reason}` in the same order.
+
+  Like `xirr_many/2`, the batch runs on the configured solver (see
+  `Finance.Solver`).
+
+      iex> Finance.CashFlow.irr_many([[-1000, 1100], [-1000, 500, 500, 300]])
+      [{:ok, 0.1}, {:ok, 0.156579}]
+  """
+  @spec irr_many([[amount]], [option]) :: [{:ok, rate} | {:error, error}]
+  def irr_many(series, opts \\ []) when is_list(series) and is_list(opts) do
+    opts = options(opts)
+
+    series
+    |> Enum.map(&prepare_periodic/1)
+    |> solve_batch(opts)
+  end
 
   # === NPV — net present value of periodic flows ===========================
 
@@ -300,6 +345,40 @@ defmodule Finance.CashFlow do
     with {:ok, flows} <- normalize(cash_flows),
          :ok <- validate(flows) do
       resolve_solver(opts).solve(flows, opts)
+    end
+  end
+
+  # Solve a prepared batch: hand the ready series to the solver in one
+  # `solve_many/2` call, then reassemble results in the original order,
+  # interleaving the series that failed preparation.
+  defp solve_batch(prepared, opts) do
+    ready = for {:ready, flows} <- prepared, do: flows
+    stitch(prepared, resolve_solver(opts).solve_many(ready, opts))
+  end
+
+  defp stitch(prepared, solved) do
+    {results, _} =
+      Enum.map_reduce(prepared, solved, fn
+        {:ready, _flows}, [result | rest] -> {result, rest}
+        {:error, _reason} = error, acc -> {error, acc}
+      end)
+
+    results
+  end
+
+  defp prepare_dated(cash_flows) when is_list(cash_flows) do
+    with {:ok, flows} <- normalize(cash_flows),
+         :ok <- validate(flows) do
+      {:ready, flows}
+    end
+  end
+
+  defp prepare_periodic(amounts) when is_list(amounts) do
+    flows = periodic_flows(amounts)
+
+    case validate(flows) do
+      :ok -> {:ready, flows}
+      error -> error
     end
   end
 

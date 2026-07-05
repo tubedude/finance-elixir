@@ -31,6 +31,15 @@ defmodule Finance.Solver.Newton do
     end
   end
 
+  @impl Finance.Solver
+  def solve_many(batch, opts) do
+    # Pure-Elixir batch: solve each series in parallel across the schedulers.
+    # A native backend would override this with a single batched call.
+    batch
+    |> Task.async_stream(&solve(&1, opts), ordered: true, timeout: :infinity)
+    |> Enum.map(fn {:ok, result} -> result end)
+  end
+
   # Arithmetic overflow at extreme rates on long-dated flows is treated as a
   # failure to converge rather than crashing the solve.
   defp safely(fun) do
