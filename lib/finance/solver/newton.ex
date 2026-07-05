@@ -1,8 +1,17 @@
 defmodule Finance.Solver.Newton do
   @moduledoc """
-  The default `Finance.Solver`: Newton-Raphson using the analytic derivative of
-  the net present value, with a bracketing bisection fallback when a Newton step
-  wanders outside the `(-1, ∞)` domain or fails to converge.
+  The default `Finance.Solver`: a safeguarded Newton-Raphson (the classic
+  `rtsafe`).
+
+  It brackets the root first, then each iteration takes a Newton step when that
+  step lands inside the bracket and is shrinking the interval fast enough, and a
+  bisection step otherwise. This keeps Newton's quadratic speed on well-behaved
+  flows while retaining bisection's guaranteed convergence — in one pass, rather
+  than running Newton to exhaustion and then bisecting separately.
+
+  Because the maintained bracket always encloses a sign change, the result is a
+  genuine root rather than a stalled non-root, and a long-dated flow whose raw
+  Newton step would overflow simply takes a bisection step instead.
   """
 
   @behaviour Finance.Solver
@@ -15,59 +24,81 @@ defmodule Finance.Solver.Newton do
     tolerance = Keyword.fetch!(opts, :tolerance)
     max_iterations = Keyword.fetch!(opts, :max_iterations)
 
-    # Each stage returns `{:ok, rate}` or `:diverged`. `safely/1` turns an
-    # arithmetic overflow — which can happen at extreme rates on long-dated
-    # flows — into `:diverged`, so a Newton failure still falls through to
-    # bisection rather than aborting the whole solve. Any `{:ok, rate}` drops
-    # to `else` to be rounded.
-    with :diverged <- safely(fn -> newton(flows, guess, max_iterations, tolerance) end),
-         :diverged <- safely(fn -> bisect(flows, max_iterations, tolerance) end) do
-      {:error, :did_not_converge}
-    else
+    case safely(fn -> rtsafe(flows, guess, tolerance, max_iterations) end) do
       {:ok, rate} -> {:ok, Float.round(rate, Keyword.fetch!(opts, :precision))}
+      :diverged -> {:error, :did_not_converge}
     end
   end
 
+  # Arithmetic overflow at extreme rates on long-dated flows is treated as a
+  # failure to converge rather than crashing the solve.
   defp safely(fun) do
     fun.()
   rescue
     ArithmeticError -> :diverged
   end
 
-  defp newton(_flows, _rate, 0, _tol), do: :diverged
-
-  defp newton(flows, rate, iterations, tol) do
-    f = present_value(flows, rate)
-    derivative = present_value_derivative(flows, rate)
-
-    cond do
-      abs(f) < tol -> {:ok, rate}
-      derivative == 0.0 -> :diverged
-      true -> newton_step(flows, rate, rate - f / derivative, iterations, tol)
-    end
-  end
-
-  defp newton_step(flows, rate, next, iterations, tol) do
-    # Convergence is decided only by `abs(f) < tol` at the top of `newton/4`, not
-    # by the step size: near a steep NPV the step `f / f'` can fall below `tol`
-    # while `f` itself is still large, which would otherwise report a non-root as
-    # solved. A stalled Newton instead exhausts its iterations and falls through
-    # to bisection. A step outside the (-1, ∞) domain halves the distance to -1.
-    if next <= -1.0 do
-      newton(flows, (rate - 1.0) / 2.0, iterations - 1, tol)
-    else
-      newton(flows, next, iterations - 1, tol)
-    end
-  end
-
-  defp bisect(flows, max_iterations, tol) do
+  # Bracket a sign change, then run the safeguarded iteration from `guess` (when it
+  # falls inside the bracket) or the midpoint.
+  defp rtsafe(flows, guess, tol, max_iterations) do
     low = safe_low(flows)
 
     case bracket(flows, low, present_value(flows, low), 1.0) do
-      {:ok, low, high} -> {:ok, bisection(flows, low, high, max_iterations, tol)}
-      :diverged -> :diverged
+      {:ok, a, b} ->
+        bracket = orient(flows, a, b)
+        x = if guess > a and guess < b, do: guess, else: (a + b) / 2
+        f = present_value(flows, x)
+        df = present_value_derivative(flows, x)
+        {:ok, search(flows, x, bracket, f, df, abs(b - a), tol, max_iterations)}
+
+      :diverged ->
+        :diverged
     end
   end
+
+  # Orient the bracket so the net present value is negative at `xlo` and positive
+  # at `xhi` — the invariant the step selection and re-bracketing below rely on.
+  defp orient(flows, a, b) do
+    if present_value(flows, a) < 0.0, do: {a, b}, else: {b, a}
+  end
+
+  defp search(_flows, x, _bracket, _f, _df, _dxold, _tol, 0), do: x
+
+  defp search(flows, x, {xlo, xhi}, f, df, dxold, tol, iters) do
+    {next, dx} = move(x, xlo, xhi, f, df, dxold)
+
+    if abs(dx) < tol do
+      next
+    else
+      f_next = present_value(flows, next)
+      df_next = present_value_derivative(flows, next)
+      bracket = if f_next < 0.0, do: {next, xhi}, else: {xlo, next}
+      search(flows, next, bracket, f_next, df_next, dx, tol, iters - 1)
+    end
+  end
+
+  # A Newton step when it's usable, a bisection step otherwise. Returns
+  # `{next_x, step}`.
+  defp move(x, xlo, xhi, f, df, dxold) do
+    if newton_usable?(x, xlo, xhi, f, df, dxold) do
+      dx = f / df
+      {x - dx, dx}
+    else
+      dx = (xhi - xlo) / 2.0
+      {xlo + dx, dx}
+    end
+  end
+
+  # Prefer Newton when the derivative isn't flat, the step lands inside the
+  # bracket, and it shrinks the interval by at least half. Comparing the Newton
+  # point against the bracket — rather than the classic
+  # `((x-xhi)·df - f)·((x-xlo)·df - f)` product — avoids an overflow in the steep
+  # zone near the bracket's floor. `df != 0.0` short-circuits before `x - f / df`.
+  defp newton_usable?(x, xlo, xhi, f, df, dxold) do
+    df != 0.0 and inside?(x - f / df, xlo, xhi) and abs(2.0 * f) <= abs(dxold * df)
+  end
+
+  defp inside?(point, xlo, xhi), do: point >= min(xlo, xhi) and point <= max(xlo, xhi)
 
   # The bracket's floor. As `rate` nears -1, `(1 + rate)^t` underflows to zero
   # (then divides by zero) for large `t`, so raise the floor just enough that the
@@ -86,24 +117,6 @@ defmodule Finance.Solver.Newton do
       {:ok, low, high}
     else
       bracket(flows, low, f_low, high * 2 + 1)
-    end
-  end
-
-  defp bisection(_flows, low, high, 0, _tol), do: (low + high) / 2
-
-  defp bisection(flows, low, high, iterations, tol) do
-    mid = (low + high) / 2
-    f_mid = present_value(flows, mid)
-
-    cond do
-      abs(f_mid) < tol or high - low < tol ->
-        mid
-
-      straddles_zero?(present_value(flows, low), f_mid) ->
-        bisection(flows, low, mid, iterations - 1, tol)
-
-      true ->
-        bisection(flows, mid, high, iterations - 1, tol)
     end
   end
 

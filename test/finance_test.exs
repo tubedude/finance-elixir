@@ -242,16 +242,37 @@ defmodule FinanceTest do
     end
   end
 
-  describe "solver bisection fallback" do
-    # `max_iterations: 1` starves Newton so it bails to the bisection fallback.
+  describe "solver bracketing" do
+    # A single safeguarded step still returns the bracketed estimate rather than
+    # erroring, so a starved solver yields a value when a root is bracketed.
     test "returns a value when a root is bracketed" do
       assert {:ok, _rate} = Finance.CashFlow.irr([-1000, 500, 500, 300], max_iterations: 1)
     end
 
     test "diverges when no root can be bracketed" do
-      # An all-positive series has no rate; bisection expands its bracket, then gives up.
+      # An all-positive series has no rate; the bracket expands, finds no sign
+      # change, and the solver gives up.
       assert Finance.TVM.rate(10, 100, 1000, 0.0, 0, max_iterations: 1) ==
                {:error, :did_not_converge}
+    end
+
+    test "a guess outside the bracket falls back to the midpoint and still converges" do
+      assert Finance.CashFlow.irr([-1000, 1100], guess: 5.0) == {:ok, 0.1}
+    end
+
+    test "magnitudes that overflow the discounting are reported, not raised" do
+      # Near the bracket floor, discounting a ~1e308 flow overflows; the solver
+      # treats that as a failure to converge rather than crashing the caller.
+      assert Finance.CashFlow.irr([1.0e308, -1.0e308]) == {:error, :did_not_converge}
+    end
+
+    test "converges on long-dated flows whose steep NPV would overflow a naive step" do
+      # A 471-period loan puts the bracket floor deep enough that the NPV near it
+      # is ~1e290; the safeguarded step must compare the Newton point against the
+      # bracket rather than multiply those magnitudes (which overflows).
+      {:ok, pv} = Finance.TVM.pv(0.011, 471, -1, 0.0, 0)
+      assert {:ok, rate} = Finance.TVM.rate(471, -1, pv, 0.0, 0, precision: 10)
+      assert_in_delta rate, 0.011, 1.0e-6
     end
   end
 

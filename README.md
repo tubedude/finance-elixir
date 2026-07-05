@@ -118,6 +118,31 @@ When the data can't produce a result, `xirr/1` and `xirr/2` return
 | `:invalid_date`        | a date could not be parsed                       |
 | `:did_not_converge`    | no rate found within the iteration limit         |
 
+## Solver
+
+The rate functions (`irr`, `xirr`, `rate`, `ytm`) find their rate with a
+safeguarded Newton-Raphson — the classic `rtsafe`. It brackets the root, then
+each step is a Newton step when that step lands inside the bracket and is
+converging fast enough, and a bisection step otherwise. This keeps Newton's
+speed on ordinary flows and bisection's guaranteed convergence on awkward ones,
+in a single pass. Because the maintained bracket always encloses a sign change,
+the result is a genuine root rather than a stalled non-root. The solver is
+swappable via the `:solver` option or `config :finance, solver: MySolver`.
+
+`bench/solver_strategies.exs` compares it against the alternatives across flow
+sets of growing length (NPV/derivative evaluations per solve, and median time):
+
+| flow set        | safeguarded Newton | plain Newton, then bisect | pure bisection    |
+| --------------- | ------------------ | ------------------------- | ----------------- |
+| 4 flows         | 13 evals · 6.0 µs  | 8 evals · 3.9 µs          | 65 evals · 22 µs  |
+| 60-period loan  | 13 evals · 74 µs   | 44 evals · 277 µs         | 65 evals · 300 µs |
+| 480-period loan | 31 evals · 1.5 ms  | 265 evals · 13.5 ms       | 65 evals · 3.1 ms |
+
+Plain Newton edges ahead on short, well-behaved flows, but on long-horizon flows
+it burns its whole iteration budget before a separate bisection pass rescues it
+(~9× slower). Safeguarded Newton is the best all-rounder — fastest on the longer
+sets, close behind on the shortest. Run it with `mix run bench/solver_strategies.exs`.
+
 ## Development
 
 ```bash
