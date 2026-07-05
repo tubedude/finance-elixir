@@ -48,11 +48,15 @@ defmodule Finance.Solver.Newton do
   end
 
   defp newton_step(flows, rate, next, iterations, tol) do
-    cond do
-      # A Newton step outside the (-1, ∞) domain: halve the distance to -1.
-      next <= -1.0 -> newton(flows, (rate - 1.0) / 2.0, iterations - 1, tol)
-      abs(next - rate) < tol -> {:ok, next}
-      true -> newton(flows, next, iterations - 1, tol)
+    # Convergence is decided only by `abs(f) < tol` at the top of `newton/4`, not
+    # by the step size: near a steep NPV the step `f / f'` can fall below `tol`
+    # while `f` itself is still large, which would otherwise report a non-root as
+    # solved. A stalled Newton instead exhausts its iterations and falls through
+    # to bisection. A step outside the (-1, ∞) domain halves the distance to -1.
+    if next <= -1.0 do
+      newton(flows, (rate - 1.0) / 2.0, iterations - 1, tol)
+    else
+      newton(flows, next, iterations - 1, tol)
     end
   end
 
