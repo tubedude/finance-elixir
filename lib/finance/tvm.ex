@@ -65,7 +65,7 @@ defmodule Finance.TVM do
     {:ok, value * 1.0}
   end
 
-  @doc "Same as `fv/5`, but hands back the value on its own and raises `ArgumentError` if the calculation fails."
+  @doc "Same as `fv/5`, but returns the value directly and raises `ArgumentError` on error."
   @spec fv!(number, number, number, number, 0 | 1) :: float
   def fv!(rate, nper, pmt, pv \\ 0.0, type \\ 0), do: rate |> fv(nper, pmt, pv, type) |> unwrap!()
 
@@ -94,7 +94,7 @@ defmodule Finance.TVM do
     {:ok, value * 1.0}
   end
 
-  @doc "Same as `pv/5`, but hands back the value on its own and raises `ArgumentError` if the calculation fails."
+  @doc "Same as `pv/5`, but returns the value directly and raises `ArgumentError` on error."
   @spec pv!(number, number, number, number, 0 | 1) :: float
   def pv!(rate, nper, pmt, fv \\ 0.0, type \\ 0), do: rate |> pv(nper, pmt, fv, type) |> unwrap!()
 
@@ -122,7 +122,7 @@ defmodule Finance.TVM do
     end
   end
 
-  @doc "Same as `pmt/5`, but hands back the value on its own and raises `ArgumentError` if the calculation fails."
+  @doc "Same as `pmt/5`, but returns the value directly and raises `ArgumentError` on error."
   @spec pmt!(number, number, number, number, 0 | 1) :: float
   def pmt!(rate, nper, pv, fv \\ 0.0, type \\ 0), do: rate |> pmt(nper, pv, fv, type) |> unwrap!()
 
@@ -146,7 +146,7 @@ defmodule Finance.TVM do
     end
   end
 
-  @doc "Same as `ipmt/6`, but hands back the value on its own and raises `ArgumentError` if the calculation fails."
+  @doc "Same as `ipmt/6`, but returns the value directly and raises `ArgumentError` on error."
   @spec ipmt!(number, number, number, number, number, 0 | 1) :: float
   def ipmt!(rate, per, nper, pv, fv \\ 0.0, type \\ 0) do
     rate |> ipmt(per, nper, pv, fv, type) |> unwrap!()
@@ -172,7 +172,7 @@ defmodule Finance.TVM do
     end
   end
 
-  @doc "Same as `ppmt/6`, but hands back the value on its own and raises `ArgumentError` if the calculation fails."
+  @doc "Same as `ppmt/6`, but returns the value directly and raises `ArgumentError` on error."
   @spec ppmt!(number, number, number, number, number, 0 | 1) :: float
   def ppmt!(rate, per, nper, pv, fv \\ 0.0, type \\ 0) do
     rate |> ppmt(per, nper, pv, fv, type) |> unwrap!()
@@ -338,7 +338,7 @@ defmodule Finance.TVM do
     end
   end
 
-  @doc "Same as `nper/5`, but hands back the value on its own and raises `ArgumentError` if the calculation fails."
+  @doc "Same as `nper/5`, but returns the value directly and raises `ArgumentError` on error."
   @spec nper!(number, number, number, number, 0 | 1) :: float
   def nper!(rate, pmt, pv, fv \\ 0.0, type \\ 0), do: rate |> nper(pmt, pv, fv, type) |> unwrap!()
 
@@ -368,7 +368,7 @@ defmodule Finance.TVM do
     end
   end
 
-  @doc "Same as `rate/6`, but hands back the rate on its own and raises `ArgumentError` if the calculation fails."
+  @doc "Same as `rate/6`, but returns the rate directly and raises `ArgumentError` on error."
   @spec rate!(number, number, number, number, 0 | 1, [option]) :: rate
   def rate!(nper, pmt, pv, fv \\ 0.0, type \\ 0, opts \\ []) do
     nper |> rate(pmt, pv, fv, type, opts) |> unwrap!()

@@ -19,7 +19,8 @@ The functions are organised into domain modules:
 - `Finance.Bonds` — fixed income (`price`, `ytm`, `duration`,
   `modified_duration`, `convexity`).
 - `Finance.Depreciation` — `sln`, `syd`, `ddb`, `db`.
-- `Finance.Returns` — performance and risk metrics (`volatility`).
+- `Finance.Returns` — performance and risk metrics (`volatility`, `cagr`,
+  `payback_period`, `discounted_payback_period`, `profitability_index`, `twr`).
 - `Finance.Solver` — the root-finding strategy behind the rate functions,
   swappable via the `:solver` option or `config :finance, solver: MySolver`.
 

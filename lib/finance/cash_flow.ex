@@ -94,11 +94,11 @@ defmodule Finance.CashFlow do
     zip(dates, values, opts)
   end
 
-  @doc "Same as `xirr/1`, but hands back the rate on its own and raises `ArgumentError` if the calculation fails."
+  @doc "Same as `xirr/1`, but returns the rate directly and raises `ArgumentError` on error."
   @spec xirr!([cash_flow]) :: rate
   def xirr!(cash_flows), do: cash_flows |> xirr() |> unwrap!()
 
-  @doc "Same as `xirr/2`, but hands back the rate on its own and raises `ArgumentError` if the calculation fails."
+  @doc "Same as `xirr/2`, but returns the rate directly and raises `ArgumentError` on error."
   @spec xirr!([cash_flow] | [date], [option] | [amount]) :: rate
   def xirr!(first, second), do: first |> xirr(second) |> unwrap!()
 
@@ -143,7 +143,7 @@ defmodule Finance.CashFlow do
     end
   end
 
-  @doc "Same as `xnpv/2`, but hands back the value on its own and raises `ArgumentError` if the calculation fails."
+  @doc "Same as `xnpv/2`, but returns the value directly and raises `ArgumentError` on error."
   @spec xnpv!(rate, [cash_flow]) :: number
   def xnpv!(rate, cash_flows), do: rate |> xnpv(cash_flows) |> unwrap!()
 
@@ -178,7 +178,7 @@ defmodule Finance.CashFlow do
     end
   end
 
-  @doc "Same as `irr/1`, but hands back the rate on its own and raises `ArgumentError` if the calculation fails."
+  @doc "Same as `irr/1`, but returns the rate directly and raises `ArgumentError` on error."
   @spec irr!([amount], [option]) :: rate
   def irr!(amounts, opts \\ []), do: amounts |> irr(opts) |> unwrap!()
 
@@ -218,7 +218,7 @@ defmodule Finance.CashFlow do
     {:ok, round_value(present_value(periodic_flows(amounts), rate), opts)}
   end
 
-  @doc "Same as `npv/2`, but hands back the value on its own and raises `ArgumentError` if the calculation fails."
+  @doc "Same as `npv/2`, but returns the value directly and raises `ArgumentError` on error."
   @spec npv!(rate, [amount]) :: number
   def npv!(rate, amounts), do: rate |> npv(amounts) |> unwrap!()
 
@@ -253,7 +253,7 @@ defmodule Finance.CashFlow do
     end
   end
 
-  @doc "Same as `mirr/3`, but hands back the rate on its own and raises `ArgumentError` if the calculation fails."
+  @doc "Same as `mirr/3`, but returns the rate directly and raises `ArgumentError` on error."
   @spec mirr!([amount], number, number, [option]) :: rate
   def mirr!(amounts, finance_rate, reinvest_rate, opts \\ []) do
     amounts |> mirr(finance_rate, reinvest_rate, opts) |> unwrap!()

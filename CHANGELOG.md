@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.4.0 — 2026-07-04
+
+### Added
+- `Finance.Returns` return metrics: `cagr/4` (compound annual growth rate),
+  `payback_period/2` and `discounted_payback_period/3` (with fractional-period
+  interpolation), `profitability_index/3` (reusing `CashFlow.npv`), and `twr/2`
+  (time-weighted return, with an optional `:periods_per_year` to annualise) —
+  each with a `!` variant.
+
 ## 1.3.0 — 2026-07-04
 
 ### Added
