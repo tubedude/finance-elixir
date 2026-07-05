@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.4.3 — 2026-07-05
+
+### Changed
+- The default solver is now a safeguarded Newton (the classic `rtsafe`): it
+  brackets the root, then each step takes a Newton step when that step lands
+  inside the bracket and is converging fast enough, and a bisection step
+  otherwise — all in one pass, rather than running Newton to exhaustion and then
+  bisecting separately. Results are unchanged, but long-horizon flows are much
+  faster (a 480-period loan's `rate` solves ~9× quicker), and because the
+  maintained bracket always encloses a sign change the solver can no longer
+  return a stalled non-root. The bracket-membership test compares the Newton
+  point against the bracket instead of multiplying two net present values, which
+  would overflow in the steep zone near the bracket's floor for long-dated flows.
+
 ## 1.4.2 — 2026-07-05
 
 ### Fixed
