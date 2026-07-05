@@ -292,6 +292,67 @@ defmodule FinanceTest do
     end
   end
 
+  describe "Finance.Solver.Brent (alternative solver)" do
+    test "reproduces the xirr regression anchors" do
+      assert Finance.CashFlow.xirr(
+               [{2015, 11, 1}, {2015, 10, 1}, {2015, 6, 1}],
+               [-800_000, -2_200_000, 1_000_000],
+               solver: Finance.Solver.Brent
+             ) == {:ok, 21.118359}
+
+      assert Finance.CashFlow.irr([-1000, 500, 500, 300], solver: Finance.Solver.Brent) ==
+               {:ok, 0.156579}
+    end
+
+    test "matches the default solver across a spread of loans, including long/steep" do
+      for rate_bp <- [10, 100, 500, 1200, 3000], nper <- [12, 60, 180, 480, 2000] do
+        rate = rate_bp / 10_000
+        pmt = -(100_000 * rate / (1 - :math.pow(1 + rate, -nper)))
+        assert {:ok, default} = Finance.TVM.rate(nper, pmt, 100_000, 0.0, 0, precision: 10)
+
+        assert {:ok, brent} =
+                 Finance.TVM.rate(nper, pmt, 100_000, 0.0, 0,
+                   precision: 10,
+                   solver: Finance.Solver.Brent
+                 )
+
+        # Two different algorithms converge to points differing below the solver
+        # tolerance, so compare within it rather than demanding bit-identity.
+        assert_in_delta brent, default, 1.0e-7, "mismatch at rate_bp=#{rate_bp} nper=#{nper}"
+      end
+    end
+
+    test "reports :did_not_converge when no root can be bracketed" do
+      assert Finance.TVM.rate(10, 100, 1000, 0.0, 0, solver: Finance.Solver.Brent) ==
+               {:error, :did_not_converge}
+    end
+
+    test "a starved iteration budget still returns the bracketed estimate" do
+      assert {:ok, _rate} =
+               Finance.CashFlow.irr([-1000, 500, 500, 300],
+                 solver: Finance.Solver.Brent,
+                 max_iterations: 1
+               )
+    end
+
+    test "magnitudes that overflow the discounting are reported, not raised" do
+      assert Finance.CashFlow.irr([1.0e308, -1.0e308], solver: Finance.Solver.Brent) ==
+               {:error, :did_not_converge}
+    end
+
+    test "collapses a negative zero like the default" do
+      # A series whose rate is exactly 0 (10 payments of 100 repay 1000).
+      assert Finance.TVM.rate(10, -100, 1000, 0.0, 0, solver: Finance.Solver.Brent) == {:ok, 0.0}
+    end
+
+    test "batches through solve_many, matching the default" do
+      series = [[-1000, 1100], [-1000, 500, 500, 300], [100, 200], [-500, 250, 250, 100]]
+
+      assert Finance.CashFlow.irr_many(series, solver: Finance.Solver.Brent) ==
+               Finance.CashFlow.irr_many(series)
+    end
+  end
+
   describe "batch — irr_many/xirr_many" do
     test "irr_many matches mapping irr over the series" do
       series = [[-1000, 1100], [-1000, 500, 500, 300], [-500, 200, 200, 200]]

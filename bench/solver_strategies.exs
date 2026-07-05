@@ -172,6 +172,134 @@ defmodule Solvers do
       ((rts - xh) * df - f) * ((rts - xl) * df - f) > 0.0 or
       abs(2.0 * f) > abs(dxold * df)
   end
+
+  # ----- Brent's method (derivative-free: secant + inverse quadratic + bisection) -----
+  # Uses only `pv/2` — no derivative. A port of Numerical Recipes' `zbrent`.
+  def brent_solver(flows, opts) do
+    low = safe_low(flows)
+
+    case bracket(flows, low, pv(flows, low), 1.0) do
+      {:ok, a, b} ->
+        root = zbrent(flows, a, b, opts[:tolerance], opts[:max_iterations])
+        {:ok, Float.round(root, opts[:precision])}
+
+      :diverged ->
+        {:error, :did_not_converge}
+    end
+  end
+
+  @eps 2.220446049250313e-16
+
+  defp zbrent(flows, a, b, tol, max_iter) do
+    brent(flows, a, b, b, pv(flows, a), pv(flows, b), pv(flows, b), 0.0, 0.0, tol, max_iter)
+  end
+
+  defp brent(_flows, _a, b, _c, _fa, _fb, _fc, _d, _e, _tol, 0), do: b
+
+  defp brent(flows, a, b, c, fa, fb, fc, d, e, tol, iters) do
+    # keep c on the far side of the root from b, and make b the closer estimate
+    {a, c, fa, fc, d, e} =
+      if same_sign?(fb, fc), do: {a, a, fa, fa, b - a, b - a}, else: {a, c, fa, fc, d, e}
+
+    {a, b, c, fa, fb, fc} =
+      if abs(fc) < abs(fb), do: {b, c, b, fb, fc, fb}, else: {a, b, c, fa, fb, fc}
+
+    tol1 = 2.0 * @eps * abs(b) + 0.5 * tol
+    xm = 0.5 * (c - b)
+
+    if abs(xm) <= tol1 or fb == 0.0 do
+      b
+    else
+      {d, e} = brent_step(a, b, c, fa, fb, fc, d, e, xm, tol1)
+      next = if abs(d) > tol1, do: b + d, else: b + brent_sign(tol1, xm)
+      brent(flows, b, next, c, fb, pv(flows, next), fc, d, e, tol, iters - 1)
+    end
+  end
+
+  # Interpolate (secant when only two points, inverse-quadratic with three) if the
+  # step stays in bounds and makes progress; otherwise bisect. Returns `{d, e}`.
+  defp brent_step(a, b, c, fa, fb, fc, d, e, xm, tol1) do
+    if abs(e) >= tol1 and abs(fa) > abs(fb) do
+      s = fb / fa
+
+      {p, q} =
+        if a == c do
+          {2.0 * xm * s, 1.0 - s}
+        else
+          q = fa / fc
+          r = fb / fc
+          {s * (2.0 * xm * q * (q - r) - (b - a) * (r - 1.0)), (q - 1.0) * (r - 1.0) * (s - 1.0)}
+        end
+
+      q = if p > 0.0, do: -q, else: q
+      p = abs(p)
+
+      if 2.0 * p < min(3.0 * xm * q - abs(tol1 * q), abs(e * q)),
+        do: {p / q, d},
+        else: {xm, xm}
+    else
+      {xm, xm}
+    end
+  end
+
+  defp same_sign?(x, y), do: (x > 0.0 and y > 0.0) or (x < 0.0 and y < 0.0)
+
+  defp brent_sign(a, b), do: if(b >= 0.0, do: abs(a), else: -abs(a))
+
+  # ----- Safeguarded secant (rtsafe with the derivative replaced by a secant slope) -----
+  # Same bracket and step-acceptance as `safe/2`, but the slope is estimated from
+  # the last two points instead of `dpv/2` — one NPV eval per step, no derivative.
+  def secant_solver(flows, opts) do
+    low = safe_low(flows)
+
+    case bracket(flows, low, pv(flows, low), 1.0) do
+      {:ok, a, b} ->
+        {xlo, xhi} = if pv(flows, a) < 0.0, do: {a, b}, else: {b, a}
+        # Seed the two secant points from the guess and the upper bound — both
+        # moderate-NPV points, never the astronomically steep bracket floor.
+        guess = opts[:guess]
+        x0 = if guess > a and guess < b, do: guess, else: (a + 3.0 * b) / 4.0
+
+        root =
+          ssecant(flows, x0, b, pv(flows, x0), pv(flows, b), xlo, xhi, abs(b - a),
+            opts[:tolerance], opts[:max_iterations])
+
+        {:ok, Float.round(root, opts[:precision])}
+
+      :diverged ->
+        {:error, :did_not_converge}
+    end
+  end
+
+  # `x`/`f` is the current estimate, `xp`/`fp` the previous point (for the slope).
+  # Converge on bracket width — not step size — because a finite-difference slope
+  # is unreliable near the steep bracket floor and would trip step-size termination.
+  defp ssecant(_flows, x, _xp, _f, _fp, _xlo, _xhi, _dxold, _tol, 0), do: x
+
+  defp ssecant(flows, x, xp, f, fp, xlo, xhi, dxold, tol, iters) do
+    if abs(xhi - xlo) < tol or f == 0.0 do
+      x
+    else
+      df = if x == xp, do: 0.0, else: (f - fp) / (x - xp)
+      candidate = if df == 0.0, do: x, else: x - f / df
+
+      secant_ok? =
+        df != 0.0 and candidate >= min(xlo, xhi) and candidate <= max(xlo, xhi) and
+          abs(2.0 * f) <= abs(dxold * df)
+
+      {next, dx} =
+        if secant_ok? do
+          {candidate, f / df}
+        else
+          d = (xhi - xlo) / 2.0
+          {xlo + d, d}
+        end
+
+      fnext = pv(flows, next)
+      {xlo2, xhi2} = if fnext < 0.0, do: {next, xhi}, else: {xlo, next}
+      ssecant(flows, next, x, fnext, f, xlo2, xhi2, dx, tol, iters - 1)
+    end
+  end
 end
 
 defmodule Fixtures do
@@ -194,32 +322,35 @@ inputs = %{
 }
 
 strategies = [
-  {"newton + bisect fallback", &Solvers.newton/2},
-  {"pure bisection", &Solvers.bisect_solver/2},
-  {"safeguarded newton", &Solvers.safe/2}
+  {"newton + bisect fallback", "newton+bis", &Solvers.newton/2},
+  {"pure bisection", "bisection", &Solvers.bisect_solver/2},
+  {"safeguarded newton", "rtsafe", &Solvers.safe/2},
+  {"safeguarded secant", "secant", &Solvers.secant_solver/2},
+  {"brent", "brent", &Solvers.brent_solver/2}
 ]
 
-# --- correctness: every strategy must agree, and the newton mirror must match
-# the shipped Finance.Solver.Newton exactly (so the timings below are credible) ---
-IO.puts("agreement — all strategies agree, and the mirror matches the shipped solver:\n")
+# --- correctness: every strategy must agree with the shipped Finance.Solver.Newton
+# (so the timings below are credible) ---
+IO.puts("agreement — every strategy must find the same rate:\n")
 
 for {label, flows} <- inputs do
-  [n, b, s] = for {_name, solve} <- strategies, do: solve.(flows, opts)
+  results = for {_name, _short, solve} <- strategies, do: solve.(flows, opts)
   shipped = Finance.Solver.Newton.solve(flows, opts)
-  ok = n == b and b == s and n == shipped
-
-  IO.puts(
-    "  #{String.pad_trailing(label, 34)} rate=#{elem(s, 1)}  mirror==shipped=#{n == shipped}  all_agree=#{ok}"
-  )
+  agree = Enum.all?(results, &(&1 == shipped))
+  IO.puts("  #{String.pad_trailing(label, 34)} rate=#{elem(shipped, 1)}  all_agree=#{agree}")
 end
 
 # --- analysis: NPV/derivative evaluations per solve ---
-IO.puts("\nNPV + derivative evaluations per solve (the mechanism behind the timings):\n")
-IO.puts("  #{String.pad_trailing("flow set", 34)}newton+bisect   pure bisect   safeguarded")
+IO.puts("\nNPV(+derivative) evaluations per solve (the mechanism behind the timings):\n")
+
+header =
+  strategies |> Enum.map(fn {_name, short, _} -> String.pad_leading(short, 12) end) |> Enum.join()
+
+IO.puts("  #{String.pad_trailing("flow set", 30)}#{header}")
 
 for {label, flows} <- inputs do
-  [n, b, s] =
-    for {_name, solve} <- strategies do
+  counts =
+    for {_name, _short, solve} <- strategies do
       Process.put(:evals, 0)
       solve.(flows, opts)
       Process.get(:evals)
@@ -227,19 +358,15 @@ for {label, flows} <- inputs do
 
   Process.delete(:evals)
 
-  row =
-    [n, b, s]
-    |> Enum.map(&String.pad_leading(Integer.to_string(&1), 12))
-    |> Enum.join("  ")
-
-  IO.puts("  #{String.pad_trailing(label, 32)}#{row}")
+  row = counts |> Enum.map(&String.pad_leading(Integer.to_string(&1), 12)) |> Enum.join()
+  IO.puts("  #{String.pad_trailing(label, 30)}#{row}")
 end
 
 # --- timing ---
 IO.puts("")
 
 Benchee.run(
-  Map.new(strategies, fn {name, solve} -> {name, fn flows -> solve.(flows, opts) end} end),
+  Map.new(strategies, fn {name, _short, solve} -> {name, fn flows -> solve.(flows, opts) end} end),
   inputs: inputs,
   time: 3,
   memory_time: 1,

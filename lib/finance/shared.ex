@@ -102,4 +102,52 @@ defmodule Finance.Shared do
       acc + amount * :math.pow(1 + rate, -t)
     end)
   end
+
+  @doc false
+  # Bracket a sign change for the solvers: `{:ok, low, high}` with the NPV changing
+  # sign across `[low, high]`, or `:diverged` when none is found.
+  def bracket(flows) do
+    low = safe_low(flows)
+    expand(flows, low, present_value(flows, low), 1.0)
+  end
+
+  # The bracket's floor. As `rate` nears -1, `(1 + rate)^t` underflows to zero for
+  # large `t`, so raise the floor just enough that the longest-dated flow's
+  # discount factor stays finite — `-0.999999` for short flows, higher for long.
+  defp safe_low(flows) do
+    max_t = Enum.reduce(flows, 1.0, fn {t, _amount}, acc -> max(t, acc) end)
+    max(:math.pow(1.0e-290, 1 / max_t), 1.0e-6) - 1.0
+  end
+
+  # Expand the upper bound until the NPV changes sign against `f_low`.
+  defp expand(_flows, _low, _f_low, high) when high > 1.0e7, do: :diverged
+
+  defp expand(flows, low, f_low, high) do
+    if straddles_zero?(f_low, present_value(flows, high)),
+      do: {:ok, low, high},
+      else: expand(flows, low, f_low, high * 2 + 1)
+  end
+
+  # Whether `a` and `b` sit on opposite sides of zero. Comparing signs rather than
+  # the product `a * b` avoids overflow when the NPV is astronomically large near
+  # the bracket's floor for long-dated flows.
+  defp straddles_zero?(a, b), do: (a <= 0 and b >= 0) or (a >= 0 and b <= 0)
+
+  @doc false
+  # Solve a batch in parallel: chunk into ~4 chunks per scheduler (amortizing the
+  # per-task spawn) and run each chunk on its own task, preserving order.
+  def solve_batch(batch, solve_fun) do
+    batch
+    |> Stream.chunk_every(chunk_size(length(batch)))
+    |> Task.async_stream(fn chunk -> Enum.map(chunk, solve_fun) end,
+      ordered: true,
+      timeout: :infinity
+    )
+    |> Enum.flat_map(fn {:ok, results} -> results end)
+  end
+
+  defp chunk_size(n) do
+    chunks = System.schedulers_online() * 4
+    max(1, div(n + chunks - 1, chunks))
+  end
 end
