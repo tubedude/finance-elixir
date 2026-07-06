@@ -32,6 +32,8 @@
 - Discounting is centralized in one overflow-safe `(1 + rate)^-t` helper, so the
   bond and returns metrics no longer use a divide form that could overflow. The
   bracket scan also stops one step sooner when the root sits at the guess.
+- The minimum Elixir is lowered to `~> 1.15` (was `~> 1.18`); CI covers 1.15
+  through 1.20.
 
 ## 1.6.0 — 2026-07-05
 
