@@ -13,7 +13,7 @@ defmodule FlatYear do
   @moduledoc false
   @behaviour Finance.DayCount
   @impl true
-  def year_fraction(date1, date2), do: Date.diff(date2, date1) / 300.0
+  def year_fraction(date1, date2, _opts), do: Date.diff(date2, date1) / 300.0
 end
 
 defmodule FinanceTest do
@@ -1532,8 +1532,10 @@ defmodule FinanceTest do
   end
 
   describe "Finance.DayCount.year_fraction/3" do
-    # Reference year fractions cross-checked against Excel's YEARFRAC (bases
-    # 3/2/1/0/4 map to actual_365/actual_360/actual_actual/thirty_360/thirty_e_360).
+    # actual_365/actual_360/thirty_360/thirty_e_360 match Excel YEARFRAC bases
+    # 3/2/0/4. actual_actual is Actual/Actual (ISDA) — NOT Excel basis 1, which
+    # uses a different average-year-length method; its reference is the ISDA
+    # definition (each calendar year's days over that year's own length).
     test "a 365-day (non-leap) span" do
       d1 = ~D[2019-01-01]
       d2 = ~D[2020-01-01]
@@ -1555,6 +1557,21 @@ defmodule FinanceTest do
       # 2019-07-01→2020-07-01: 184 days in 2019 (/365) + 182 in leap 2020 (/366).
       yf = Finance.DayCount.year_fraction(~D[2019-07-01], ~D[2020-07-01], :actual_actual)
       assert_in_delta yf, 184 / 365 + 182 / 366, 1.0e-12
+    end
+
+    test "ACT/ACT sums per calendar year across a multi-year span over a leap year" do
+      # The classic bug is one denominator for the whole span; the value must equal
+      # the ISDA per-year sum, computed here from the definition (not the impl).
+      d1 = ~D[2019-07-01]
+      d2 = ~D[2022-03-01]
+
+      expected =
+        Date.diff(~D[2020-01-01], d1) / 365 +
+          366 / 366 +
+          365 / 365 +
+          Date.diff(d2, ~D[2022-01-01]) / 365
+
+      assert_in_delta Finance.DayCount.year_fraction(d1, d2, :actual_actual), expected, 1.0e-12
     end
 
     test "30/360 US and 30E/360 differ when the end lands on the 31st" do
