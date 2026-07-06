@@ -82,8 +82,7 @@ defmodule Finance.Bonds do
         flows = [{0.0, -price * 1.0} | bond_flows(face, coupon_rate, n, freq)]
 
         with {:ok, periodic} <- resolve_solver(opts).solve(flows, opts) do
-          # Annualize the per-period rate. round_value applies the requested
-          # precision to the product; it is not a second rounding of the yield.
+          # Annualize the per-period rate to the requested precision.
           {:ok, round_value(periodic * freq, opts)}
         end
     end

@@ -14,12 +14,14 @@ defmodule Finance.Shared do
                     tolerance: [
                       type: :float,
                       default: 1.0e-9,
-                      doc: "convergence threshold on the net present value"
+                      doc:
+                        "convergence threshold on the rate: iterating stops once the step (or bracket width) falls below it"
                     ],
                     max_iterations: [
                       type: :pos_integer,
                       default: 100,
-                      doc: "cap on solver iterations before giving up"
+                      doc:
+                        "cap on solver iterations; the current bracketed estimate is returned if it is reached"
                     ],
                     precision: [
                       type: :non_neg_integer,

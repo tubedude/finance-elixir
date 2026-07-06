@@ -10,8 +10,8 @@ defmodule Finance.Solver.Newton do
   than running Newton to exhaustion and then bisecting separately.
 
   Because the maintained bracket always encloses a sign change, the result is a
-  genuine root rather than a stalled non-root, and a long-dated flow whose raw
-  Newton step would overflow simply takes a bisection step instead.
+  genuine root rather than a stalled non-root, and a Newton step that would leave
+  the bracket simply becomes a bisection step instead.
 
   Bracketing scans the interior of the rate domain rather than only its extremes,
   so it finds a root even when the NPV crosses zero an even number of times (a
