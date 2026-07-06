@@ -42,7 +42,7 @@ Add `finance` to your dependencies in `mix.exs`:
 
 ```elixir
 def deps do
-  [{:finance, "~> 1.5"}]
+  [{:finance, "~> 1.6"}]
 end
 ```
 
