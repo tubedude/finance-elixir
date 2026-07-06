@@ -176,6 +176,56 @@ defmodule Finance.CashFlow do
   @spec xnpv!(rate, [cash_flow]) :: number
   def xnpv!(rate, cash_flows), do: rate |> xnpv(cash_flows) |> unwrap!()
 
+  @doc """
+  Net future value of dated cash flows at `rate` — their combined worth at the
+  *latest* date. The future-value mirror of `xnpv/2` (which values them at the
+  earliest date); the two differ by compounding over the series' span.
+
+      iex> flows = [{~D[2021-01-01], -1000}, {~D[2022-01-01], 1100}]
+      iex> Finance.CashFlow.xnfv(0.1, flows)
+      {:ok, 0.0}
+  """
+  @spec xnfv(rate, [cash_flow]) :: {:ok, number} | {:error, error}
+  def xnfv(rate, cash_flows) when is_number(rate) and is_list(cash_flows) do
+    xnfv(rate, cash_flows, [])
+  end
+
+  @doc "Same as `xnfv/2`, and additionally takes `:precision` and `:basis`. See `xnfv/2`."
+  @spec xnfv(rate, [cash_flow], [option]) :: {:ok, number} | {:error, error}
+  def xnfv(rate, cash_flows, opts)
+      when is_number(rate) and is_list(cash_flows) and is_list(opts) do
+    opts = options(opts)
+
+    with :ok <- check_rate(rate),
+         {:ok, flows} <- normalize(cash_flows, Keyword.fetch!(opts, :basis)) do
+      horizon = flows |> Enum.map(fn {t, _amount} -> t end) |> Enum.max()
+      {:ok, round_value(present_value(flows, rate) * :math.pow(1 + rate, horizon), opts)}
+    end
+  end
+
+  @doc "Same as `xnfv/2`, but returns the value directly and raises `ArgumentError` on error."
+  @spec xnfv!(rate, [cash_flow]) :: number
+  def xnfv!(rate, cash_flows), do: rate |> xnfv(cash_flows) |> unwrap!()
+
+  @doc """
+  Whether a series is *conventional* — its amounts change sign exactly once, so it
+  has a single, unambiguous internal rate of return. More than one sign change
+  makes it non-conventional: it may admit several valid IRRs, and `xirr`/`irr`
+  return the one nearest `:guess`. Use this to detect that case before solving.
+
+  Accepts periodic amounts or `{date, amount}` pairs (ordered by date first).
+
+      iex> Finance.CashFlow.conventional?([-1000, 300, 400, 500])
+      true
+
+      iex> Finance.CashFlow.conventional?([-1000, 3000, -2500])
+      false
+  """
+  @spec conventional?([amount] | [cash_flow]) :: boolean
+  def conventional?(cash_flows) when is_list(cash_flows) do
+    cash_flows |> amounts_in_order() |> sign_changes() == 1
+  end
+
   # === IRR — internal rate of return for periodic flows ====================
 
   @doc """
@@ -456,4 +506,33 @@ defmodule Finance.CashFlow do
   defp signed_both_ways?(amounts) do
     Enum.any?(amounts, &(&1 > 0)) and Enum.any?(amounts, &(&1 < 0))
   end
+
+  # Amounts as floats in chronological order: `{date, amount}` pairs are sorted by
+  # date, a bare list of amounts is taken as given.
+  defp amounts_in_order(cash_flows) do
+    if pairs?(cash_flows) do
+      cash_flows
+      |> Enum.sort_by(fn {date, _amount} -> to_comparable_date(date) end, Date)
+      |> Enum.map(fn {_date, amount} -> to_amount(amount) end)
+    else
+      Enum.map(cash_flows, &to_amount/1)
+    end
+  end
+
+  defp to_comparable_date(%Date{} = date), do: date
+  defp to_comparable_date({y, m, d}), do: Date.new!(y, m, d)
+
+  # Count the sign changes in a sequence, ignoring zeros (a zero flow is neither a
+  # crossing nor a break).
+  defp sign_changes(amounts) do
+    amounts
+    |> Enum.map(&sign/1)
+    |> Enum.reject(&(&1 == 0))
+    |> Enum.chunk_every(2, 1, :discard)
+    |> Enum.count(fn [a, b] -> a != b end)
+  end
+
+  defp sign(amount) when amount > 0, do: 1
+  defp sign(amount) when amount < 0, do: -1
+  defp sign(_amount), do: 0
 end

@@ -165,6 +165,10 @@ end
 Finance.CashFlow.xirr(flows, basis: MyApp.Business252)
 ```
 
+`xnfv/2` gives the net *future* value of dated flows (the mirror of `xnpv`), and
+`conventional?/1` reports whether a series changes sign exactly once — a `false`
+warns that it may have several valid IRRs before you solve.
+
 ## Solver
 
 The rate functions (`irr`, `xirr`, `rate`, `ytm`) find their rate with a

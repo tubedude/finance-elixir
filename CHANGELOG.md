@@ -10,6 +10,11 @@
   `:thirty_e_360` (Eurobond). `:basis` also accepts any module implementing the new
   `Finance.DayCount` behaviour, so calendar-based conventions a dependency-free
   library can't carry (Brazilian Business/252, say) plug in from your app.
+- `Finance.CashFlow.xnfv/2,3` (+ `xnfv!`) — net future value of dated cash flows,
+  the future-value mirror of `xnpv`.
+- `Finance.CashFlow.conventional?/1` — whether a series changes sign exactly once
+  (a single, unambiguous IRR); a `false` warns of possible multiple IRRs before
+  solving.
 
 ### Changed
 - Day-count conventions are cross-checked against Excel `YEARFRAC` reference

@@ -5,8 +5,9 @@ defmodule Finance do
 
   The functions are organised into domain modules:
 
-    * `Finance.CashFlow` — net present value and internal rate of return
-      (`npv`, `xnpv`, `irr`, `xirr`, `mirr`), plus batched `irr_many`/`xirr_many`.
+    * `Finance.CashFlow` — net present/future value and internal rate of return
+      (`npv`, `xnpv`, `xnfv`, `irr`, `xirr`, `mirr`), `conventional?`, plus batched
+      `irr_many`/`xirr_many`.
     * `Finance.TVM` — time value of money (`pv`, `fv`, `pmt`, `ipmt`, `ppmt`,
       `nper`, `rate`) and `amortization_schedule`.
     * `Finance.Rates` — rate conversions (`effective_annual_rate`,

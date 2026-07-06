@@ -1633,6 +1633,79 @@ defmodule FinanceTest do
     end
   end
 
+  describe "xnfv/2" do
+    test "is xnpv compounded forward over the series' span" do
+      flows = [{~D[2021-01-01], -1000}, {~D[2022-01-01], 500}, {~D[2023-01-01], 700}]
+      # 2021→2023 is exactly 2 non-leap years, so xnfv = xnpv * 1.1^2.
+      assert Finance.CashFlow.xnfv(0.1, flows) == {:ok, 40.0}
+      assert {:ok, npv} = Finance.CashFlow.xnpv(0.1, flows, precision: 10)
+      assert {:ok, fv} = Finance.CashFlow.xnfv(0.1, flows, precision: 10)
+      assert_in_delta fv, npv * :math.pow(1.1, 2), 1.0e-6
+    end
+
+    test "is zero exactly when xnpv is (at the break-even rate)" do
+      flows = [{~D[2021-01-01], -1000}, {~D[2022-01-01], 1100}]
+      assert Finance.CashFlow.xnfv(0.1, flows) == {:ok, 0.0}
+    end
+
+    test "propagates errors and guards the rate domain" do
+      assert Finance.CashFlow.xnfv(0.1, []) == {:error, :insufficient_data}
+
+      assert Finance.CashFlow.xnfv(-1.0, [{~D[2021-01-01], -1000}, {~D[2022-01-01], 1100}]) ==
+               {:error, :undefined}
+    end
+
+    test "xnfv!/2 returns the bare value and raises on error" do
+      flows = [{~D[2021-01-01], -1000}, {~D[2022-01-01], 1100}]
+      assert Finance.CashFlow.xnfv!(0.1, flows) == 0.0
+      assert_raise ArgumentError, fn -> Finance.CashFlow.xnfv!(0.1, []) end
+    end
+  end
+
+  describe "conventional?/1" do
+    test "true for exactly one sign change" do
+      assert Finance.CashFlow.conventional?([-1000, 300, 400, 500])
+      assert Finance.CashFlow.conventional?([-1000, 1100])
+      assert Finance.CashFlow.conventional?([500, 500, -2000])
+    end
+
+    test "false for more than one sign change (multi-IRR risk)" do
+      refute Finance.CashFlow.conventional?([-1000, 3000, -2500])
+      refute Finance.CashFlow.conventional?([-1600, 10_000, -10_000])
+    end
+
+    test "false for a single-signed series (no IRR)" do
+      refute Finance.CashFlow.conventional?([100, 200, 300])
+      refute Finance.CashFlow.conventional?([-100, -200])
+    end
+
+    test "ignores zero flows" do
+      assert Finance.CashFlow.conventional?([-1000, 0, 0, 1100])
+    end
+
+    test "orders {date, amount} pairs by date before counting" do
+      # Same flows, shuffled: the sign pattern in time order is - + -, so non-conventional.
+      pairs = [{~D[2020-06-01], 3000}, {~D[2021-01-01], -2500}, {~D[2020-01-01], -1000}]
+      refute Finance.CashFlow.conventional?(pairs)
+
+      assert Finance.CashFlow.conventional?([
+               {~D[2020-01-01], -1000},
+               {~D[2020-06-01], 400},
+               {~D[2021-01-01], 900}
+             ])
+    end
+
+    test "accepts {y, m, d} tuple dates too" do
+      assert Finance.CashFlow.conventional?([{{2020, 1, 1}, -1000}, {{2021, 1, 1}, 1100}])
+
+      refute Finance.CashFlow.conventional?([
+               {{2020, 1, 1}, -1000},
+               {{2021, 1, 1}, 1100},
+               {{2022, 1, 1}, -50}
+             ])
+    end
+  end
+
   describe "properties" do
     # Build a two-flow investment with a known rate and confirm we recover it:
     # investing -P today and receiving P·(1+r)^years after `years` implies XIRR = r.
