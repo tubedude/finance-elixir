@@ -1,5 +1,40 @@
 # Changelog
 
+## 1.6.1 — 2026-07-06
+
+### Fixed
+- A rate at or below -100% now returns `{:error, :undefined}` instead of raising
+  `ArithmeticError` (or returning silent garbage) everywhere `(1 + rate)^t` is
+  computed: `CashFlow.xnpv`/`npv`/`mirr`, `TVM.fv`/`pv`/`pmt`/`amortization_schedule`,
+  `Bonds.price` and the risk metrics, `Returns.discounted_payback_period`/
+  `profitability_index`/`twr`, `Rates.effective_annual_rate`, and
+  `Depreciation.sln` (which also rejects a non-positive `life`).
+  `Rates.nominal_rate(-1.0, m)` now returns `-m`, so it stays the exact inverse of
+  `effective_annual_rate` at total loss.
+- `Bonds.duration`/`modified_duration`/`convexity` return `{:error, :undefined}`
+  when a negative coupon drives the bond price to zero, rather than a nonsensical
+  value or a crash.
+- `Bonds.ytm` and `Returns.profitability_index` no longer round an intermediate
+  value before the final round (`ytm`'s periodic rounding was amplified by `freq`).
+  Both compute at full precision and round once.
+- `xirr(dates, [])` returns `{:error, :mismatched_lengths}` instead of crashing — an
+  empty amounts list is the two-list form, not options.
+- A malformed cash-flow amount is no longer mislabeled `{:error, :invalid_date}`.
+  Date parsing uses `Date.from_erl/1` (removing a broad `rescue`); a bad amount is a
+  caller error and raises, like other malformed inputs.
+
+### Changed
+- `:precision` is validated as `0..15` (the range `Float.round/2` accepts) rather
+  than any non-negative integer, and `:guess`/`:tolerance` now accept integers as
+  well as floats.
+- `Bonds` requires an integer coupon frequency (`freq`), matching its documented
+  `pos_integer`; `Depreciation.syd` rejects a fractional `period`, matching `ddb`/`db`.
+- Discounting is centralized in one overflow-safe `(1 + rate)^-t` helper, so the
+  bond and returns metrics no longer use a divide form that could overflow. The
+  bracket scan also stops one step sooner when the root sits at the guess.
+- The minimum Elixir is lowered to `~> 1.15` (was `~> 1.18`); CI covers 1.15
+  through 1.20.
+
 ## 1.6.0 — 2026-07-05
 
 ### Added

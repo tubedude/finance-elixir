@@ -22,10 +22,11 @@ defmodule Finance.Rates do
   """
   @spec effective_annual_rate(number, number) :: {:ok, float} | {:error, error}
   def effective_annual_rate(nominal, m) when is_number(nominal) and is_number(m) do
-    if m <= 0 do
-      {:error, :undefined}
-    else
-      {:ok, :math.pow(1 + nominal / m, m) - 1}
+    cond do
+      m <= 0 -> {:error, :undefined}
+      # A negative base raised to a fractional `m` has no real value.
+      1 + nominal / m < 0 -> {:error, :undefined}
+      true -> {:ok, :math.pow(1 + nominal / m, m) - 1}
     end
   end
 
@@ -48,7 +49,9 @@ defmodule Finance.Rates do
   def nominal_rate(effective, m) when is_number(effective) and is_number(m) do
     cond do
       m <= 0 -> {:error, :undefined}
-      1 + effective <= 0 -> {:error, :undefined}
+      # `1 + effective == 0` is the total-loss case: `pow(0, 1/m)` is 0, so the
+      # inverse of `effective_annual_rate` still holds there.
+      1 + effective < 0 -> {:error, :undefined}
       true -> {:ok, m * (:math.pow(1 + effective, 1 / m) - 1)}
     end
   end

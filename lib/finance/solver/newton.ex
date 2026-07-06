@@ -21,7 +21,7 @@ defmodule Finance.Solver.Newton do
 
   @behaviour Finance.Solver
 
-  import Finance.Shared, only: [present_value: 2]
+  import Finance.Shared, only: [present_value: 2, round_value: 2, safely: 1]
 
   @impl Finance.Solver
   def solve(flows, opts) do
@@ -30,8 +30,7 @@ defmodule Finance.Solver.Newton do
     max_iterations = Keyword.fetch!(opts, :max_iterations)
 
     case safely(fn -> rtsafe(flows, guess, tolerance, max_iterations) end) do
-      # `+ 0.0` collapses a negative zero (a rate that converges to 0 from below).
-      {:ok, rate} -> {:ok, Float.round(rate, Keyword.fetch!(opts, :precision)) + 0.0}
+      {:ok, rate} -> {:ok, round_value(rate, opts)}
       :diverged -> {:error, :did_not_converge}
     end
   end
@@ -41,16 +40,6 @@ defmodule Finance.Solver.Newton do
   @impl Finance.Solver
   def solve_many(batch, opts), do: Finance.Shared.solve_batch(batch, &solve(&1, opts))
 
-  # Arithmetic overflow at extreme rates on long-dated flows is treated as a
-  # failure to converge rather than crashing the solve.
-  defp safely(fun) do
-    fun.()
-  rescue
-    ArithmeticError -> :diverged
-  end
-
-  # Bracket a sign change, then run the safeguarded iteration from `guess` (when it
-  # falls inside the bracket) or the midpoint.
   defp rtsafe(flows, guess, tol, max_iterations) do
     case Finance.Shared.bracket(flows, guess) do
       {:ok, a, b} ->
@@ -86,8 +75,7 @@ defmodule Finance.Solver.Newton do
     end
   end
 
-  # A Newton step when it's usable, a bisection step otherwise. Returns
-  # `{next_x, step}`.
+  # Returns `{next_x, step}`.
   defp move(x, xlo, xhi, f, df, dxold) do
     if newton_usable?(x, xlo, xhi, f, df, dxold) do
       dx = f / df
@@ -98,13 +86,14 @@ defmodule Finance.Solver.Newton do
     end
   end
 
-  # Prefer Newton when the derivative isn't flat, the step lands inside the
-  # bracket, and it shrinks the interval by at least half. Comparing the Newton
-  # point against the bracket — rather than the classic
+  # Prefer Newton when the derivative isn't flat, the step shrinks the interval by
+  # at least half, and it lands inside the bracket. Comparing the Newton point
+  # against the bracket — rather than the classic
   # `((x-xhi)·df - f)·((x-xlo)·df - f)` product — avoids an overflow in the steep
-  # zone near the bracket's floor. `df != 0.0` short-circuits before `x - f / df`.
+  # zone near the bracket's floor. The magnitude test runs before `x - f / df`, so
+  # the division is provably bounded (`|f/df| ≤ |dxold|/2`) when it is computed.
   defp newton_usable?(x, xlo, xhi, f, df, dxold) do
-    df != 0.0 and inside?(x - f / df, xlo, xhi) and abs(2.0 * f) <= abs(dxold * df)
+    df != 0.0 and abs(2.0 * f) <= abs(dxold * df) and inside?(x - f / df, xlo, xhi)
   end
 
   defp inside?(point, xlo, xhi), do: point >= min(xlo, xhi) and point <= max(xlo, xhi)
@@ -115,7 +104,7 @@ defmodule Finance.Solver.Newton do
   # `:math.pow` would raise on) for long-dated flows.
   defp present_value_derivative(flows, rate) do
     Enum.reduce(flows, 0.0, fn {t, amount}, acc ->
-      acc + -t * amount * :math.pow(1 + rate, -(t + 1))
+      acc - t * amount * :math.pow(1 + rate, -(t + 1))
     end)
   end
 end

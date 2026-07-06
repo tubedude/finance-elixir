@@ -15,9 +15,11 @@ supported — both without a hard dependency, guarded with `is_struct(value, Mod
 
 ## Toolchain
 
-Elixir/OTP are pinned in `.tool-versions` (asdf): **Elixir 1.20 / OTP 29**.
-`mix.exs` requires `~> 1.18`. CI (`.github/workflows/ci.yml`) tests on 1.18/27 and
-1.20/29, plus a job that runs the suite against Decimal 2.x.
+`.tool-versions` (asdf) pins local dev to **Elixir 1.20 / OTP 29**, but `mix.exs`
+requires only `~> 1.15`. CI (`.github/workflows/ci.yml`) tests 1.15/25, 1.18/27,
+and 1.20/29, plus a job that runs the suite against Decimal 2.x. `mix format` and
+`mix credo` run only on the newest version (the `lint` matrix flag), since the
+formatter's output can differ across Elixir releases.
 
 ## Commands
 

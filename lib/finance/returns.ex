@@ -13,7 +13,7 @@ defmodule Finance.Returns do
   periods 1, 2, ….
   """
 
-  import Finance.Shared, only: [round_value: 2, unwrap!: 1]
+  import Finance.Shared, only: [round_value: 2, unwrap!: 1, present_value: 2, discount_factor: 2]
 
   @type error :: Finance.error()
 
@@ -76,16 +76,15 @@ defmodule Finance.Returns do
   @spec volatility([number], keyword) :: {:ok, float} | {:error, error}
   def volatility(prices, opts \\ []) when is_list(prices) do
     opts = NimbleOptions.validate!(opts, @volatility_options_schema)
-    returns = period_returns(prices, Keyword.fetch!(opts, :returns))
 
-    cond do
-      returns == :error ->
+    case period_returns(prices, Keyword.fetch!(opts, :returns)) do
+      :error ->
         {:error, :undefined}
 
-      length(returns) < 2 ->
+      returns when length(returns) < 2 ->
         {:error, :insufficient_data}
 
-      true ->
+      returns ->
         {:ok, round_value(annualise(returns, Keyword.fetch!(opts, :periods_per_year)), opts)}
     end
   end
@@ -149,7 +148,7 @@ defmodule Finance.Returns do
   @doc """
   Discounted payback period — like `payback_period/2`, but recovers the outlay
   from cash flows discounted at `rate` (so it accounts for the time value of
-  money and is always at least as long as the plain payback).
+  money and, for a non-negative rate, is at least as long as the plain payback).
 
       iex> Finance.Returns.discounted_payback_period([-1000, 600, 600, 600], 0.1)
       {:ok, 1.916667}
@@ -158,7 +157,10 @@ defmodule Finance.Returns do
   def discounted_payback_period(cash_flows, rate, opts \\ [])
       when is_list(cash_flows) and is_number(rate) and is_list(opts) do
     opts = NimbleOptions.validate!(opts, @precision_options_schema)
-    recovery_result(discount_flows(cash_flows, rate), opts)
+
+    if 1 + rate <= 0,
+      do: {:error, :undefined},
+      else: recovery_result(discount_flows(cash_flows, rate), opts)
   end
 
   @doc "Same as `discounted_payback_period/3`, but returns the value directly and raises `ArgumentError` on error."
@@ -206,15 +208,19 @@ defmodule Finance.Returns do
       {:ok, 0.082432}
   """
   @spec twr([number], keyword) :: {:ok, float} | {:error, error}
-  def twr(period_returns, opts \\ []) when is_list(period_returns) and is_list(opts) do
+  def twr(returns, opts \\ []) when is_list(returns) and is_list(opts) do
     opts = NimbleOptions.validate!(opts, @twr_options_schema)
 
     cond do
-      period_returns == [] -> {:error, :insufficient_data}
-      not Enum.all?(period_returns, &is_number/1) -> {:error, :undefined}
-      true -> {:ok, round_value(time_weighted(period_returns, opts), opts)}
+      returns == [] -> {:error, :insufficient_data}
+      not Enum.all?(returns, &valid_return?/1) -> {:error, :undefined}
+      true -> {:ok, round_value(time_weighted(returns, opts), opts)}
     end
   end
+
+  # A period return below -100% has no meaning and would push `1 + cumulative`
+  # negative, so annualisation's `:math.pow` would leave its real domain.
+  defp valid_return?(r), do: is_number(r) and r >= -1
 
   @doc "Same as `twr/2`, but returns the value directly and raises `ArgumentError` on error."
   @spec twr!([number], keyword) :: float
@@ -286,20 +292,22 @@ defmodule Finance.Returns do
   defp discount_flows(flows, rate) do
     flows
     |> Enum.with_index()
-    |> Enum.map(fn {flow, i} -> flow / :math.pow(1 + rate, i) end)
+    |> Enum.map(fn {flow, i} -> flow * discount_factor(rate, i) end)
   end
 
   # --- profitability index ------------------------------------------------
 
+  defp profitability(_cash_flows, rate, _opts) when 1 + rate <= 0, do: {:error, :undefined}
   defp profitability([], _rate, _opts), do: {:error, :insufficient_data}
-  defp profitability([initial | _], _rate, _opts) when initial >= 0, do: {:error, :undefined}
 
-  defp profitability(cash_flows, rate, opts) do
-    precision = Keyword.fetch!(opts, :precision)
+  defp profitability([initial | _], _rate, _opts) when is_number(initial) and initial >= 0,
+    do: {:error, :undefined}
 
-    with {:ok, npv} <- Finance.CashFlow.npv(rate, cash_flows, precision: precision) do
-      {:ok, round_value(1 + npv / -hd(cash_flows), opts)}
-    end
+  defp profitability([initial | _] = cash_flows, rate, opts) do
+    # PI = 1 + NPV / -initial_outlay. Discount at full precision and round once,
+    # so the ratio isn't skewed by a pre-rounded NPV.
+    flows = cash_flows |> Enum.with_index() |> Enum.map(fn {cf, i} -> {i * 1.0, cf * 1.0} end)
+    {:ok, round_value(1 + present_value(flows, rate) / -initial, opts)}
   end
 
   # --- time-weighted return -----------------------------------------------

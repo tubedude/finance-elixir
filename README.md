@@ -185,7 +185,7 @@ a rayon thread pool — add it and point `:solver` at it:
 ```elixir
 # mix.exs
 {:finance, "~> 1.6"},
-{:finance_rustler, "~> 0.1"}
+{:finance_rustler, "~> 0.2"}
 
 # config/config.exs
 config :finance, solver: FinanceRustler.Solver

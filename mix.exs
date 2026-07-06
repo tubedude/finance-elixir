@@ -1,14 +1,14 @@
 defmodule Finance.MixProject do
   use Mix.Project
 
-  @version "1.6.0"
+  @version "1.6.1"
   @source_url "https://github.com/tubedude/finance-elixir"
 
   def project do
     [
       app: :finance,
       version: @version,
-      elixir: "~> 1.18",
+      elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       description: description(),
