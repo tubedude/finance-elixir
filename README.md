@@ -151,19 +151,24 @@ short series the default is quicker, but Brent is faster on long-horizon flows �
 long amortization schedules or bond ladders — where each evaluation is expensive.
 Pass `solver: Finance.Solver.Brent` where it pays.
 
-`bench/solver_strategies.exs` compares it against the alternatives across flow
-sets of growing length (NPV/derivative evaluations per solve, and median time):
+`bench/solver_strategies.exs` compares the two shipped solvers against reference
+strategies across flow sets of growing length (NPV/derivative evaluations per
+solve, and median time):
 
-| flow set        | safeguarded Newton | plain Newton, then bisect | pure bisection    |
-| --------------- | ------------------ | ------------------------- | ----------------- |
-| 4 flows         | 13 evals · 6.0 µs  | 8 evals · 3.9 µs          | 65 evals · 22 µs  |
-| 60-period loan  | 13 evals · 74 µs   | 44 evals · 277 µs         | 65 evals · 300 µs |
-| 480-period loan | 31 evals · 1.5 ms  | 265 evals · 13.5 ms       | 65 evals · 3.1 ms |
+| flow set        | safeguarded Newton (default) | Brent              | plain Newton, then bisect | pure bisection    |
+| --------------- | ---------------------------- | ------------------ | ------------------------- | ----------------- |
+| 4 flows         | 13 evals · 7.5 µs            | 14 evals · 7.4 µs  | 8 evals · 3.7 µs          | 65 evals · 22 µs  |
+| 60-period loan  | 13 evals · 94 µs             | 16 evals · 72 µs   | 44 evals · 256 µs         | 65 evals · 335 µs |
+| 480-period loan | 31 evals · 1.5 ms            | 24 evals · 0.86 ms | 265 evals · 11.6 ms       | 65 evals · 2.3 ms |
 
-Plain Newton edges ahead on short, well-behaved flows, but on long-horizon flows
-it burns its whole iteration budget before a separate bisection pass rescues it
-(~9× slower). Safeguarded Newton is the best all-rounder — fastest on the longer
-sets, close behind on the shortest. Run it with `mix run bench/solver_strategies.exs`.
+Safeguarded Newton is the default all-rounder — fastest or near-fastest across
+the board, and its bracket always encloses a sign change so the result is a
+genuine root. `Finance.Solver.Brent` ties it on the shortest flows and pulls
+ahead as they lengthen (~1.3× faster on the medium loan, ~1.7× on the long one),
+because it spends one evaluation per step instead of two. Plain Newton edges both
+out on the tiny set but burns its whole iteration budget on long flows before a
+separate bisection pass rescues it (~8× slower than the default). Run it with
+`mix run bench/solver_strategies.exs`.
 
 ### Batch and the native backend
 
