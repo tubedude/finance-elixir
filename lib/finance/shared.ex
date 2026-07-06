@@ -6,13 +6,13 @@ defmodule Finance.Shared do
 
   @options_schema NimbleOptions.new!(
                     guess: [
-                      type: :float,
+                      type: {:or, [:float, :integer]},
                       default: 0.1,
                       doc:
                         "initial rate for the solver; for a series with more than one rate, selects the one nearest the guess"
                     ],
                     tolerance: [
-                      type: :float,
+                      type: {:or, [:float, :integer]},
                       default: 1.0e-9,
                       doc:
                         "convergence threshold on the rate: iterating stops once the step (or bracket width) falls below it"
@@ -24,9 +24,9 @@ defmodule Finance.Shared do
                         "cap on solver iterations; the current bracketed estimate is returned if it is reached"
                     ],
                     precision: [
-                      type: :non_neg_integer,
+                      type: {:in, 0..15},
                       default: 6,
-                      doc: "decimal places the result is rounded to"
+                      doc: "decimal places the result is rounded to (0..15)"
                     ],
                     solver: [
                       type: :atom,
@@ -56,9 +56,19 @@ defmodule Finance.Shared do
   end
 
   @doc "Round a result to the `:precision` in `opts`; `+ 0.0` collapses a negative zero to `0.0`."
-  @spec round_value(number, keyword) :: float
+  @spec round_value(float, keyword) :: float
   def round_value(value, opts) do
     Float.round(value, Keyword.fetch!(opts, :precision)) + 0.0
+  end
+
+  @doc false
+  # Run `fun`, mapping an arithmetic overflow to `:diverged` rather than crashing.
+  # `:math.pow` at an extreme rate on a long-dated flow signals overflow only by
+  # raising, so a rescue is the only way to turn it into a solver error.
+  def safely(fun) do
+    fun.()
+  rescue
+    ArithmeticError -> :diverged
   end
 
   @doc "Unwrap an `{:ok, value}`; raise `ArgumentError` on `{:error, reason}`. Backs the `!` variants."
@@ -93,17 +103,22 @@ defmodule Finance.Shared do
     end
   end
 
-  @doc "Net present value of normalized flows at `rate`: `Σ amount / (1 + rate)^t`."
+  @doc """
+  Discount factor for time `t` at `rate`: `(1 + rate)^-t`.
+
+  The negative exponent is deliberate — the divide form `1 / (1 + rate)^t` would
+  overflow its denominator at a high rate over a long horizon, and Erlang's
+  `:math.pow` raises on overflow. This form underflows to a negligible 0 instead,
+  so every discounting site in the library (`present_value`, bond and returns
+  metrics) routes through it. Callers must ensure `1 + rate > 0`.
+  """
+  @spec discount_factor(number, number) :: float
+  def discount_factor(rate, t), do: :math.pow(1 + rate, -t)
+
+  @doc "Net present value of normalized flows at `rate`: `Σ amount · (1 + rate)^-t`."
   @spec present_value([{number, number}], number) :: float
   def present_value(flows, rate) do
-    # Discount with a negative exponent — `amount * (1 + rate)^-t` — rather than
-    # dividing by `(1 + rate)^t`. At a high rate over a long horizon the factor
-    # underflows to 0 (a negligible term, correctly ~0); the divide form would
-    # instead overflow the denominator, and Erlang's `:math.pow` raises on
-    # overflow, which would abort the whole solve.
-    Enum.reduce(flows, 0.0, fn {t, amount}, acc ->
-      acc + amount * :math.pow(1 + rate, -t)
-    end)
+    Enum.reduce(flows, 0.0, fn {t, amount}, acc -> acc + amount * discount_factor(rate, t) end)
   end
 
   # Grid for the bracket scan: grow `1 + rate` by 5% per step, up to a rate of 1e7.
@@ -138,10 +153,10 @@ defmodule Finance.Shared do
     crossed? = straddles_zero?(f_prev, f)
     best = if crossed?, do: closer(best, {prev, rate}, guess), else: best
 
-    # Stop once a sign change is found entirely above the guess: it is the nearest
-    # interval above, `best` already holds the nearest at or below, and everything
-    # further out is farther still.
-    if crossed? and prev >= guess,
+    # Stop at the first sign change reaching the guess: it either contains the guess
+    # (distance 0, unbeatable) or is the nearest interval above it, and `best`
+    # already holds the nearest below — everything further out is farther still.
+    if crossed? and rate >= guess,
       do: finalize(best),
       else: scan(flows, guess, rate, f, grid_step(rate), best)
   end
@@ -149,8 +164,6 @@ defmodule Finance.Shared do
   defp finalize(nil), do: :diverged
   defp finalize({low, high}), do: {:ok, low, high}
 
-  # Keep whichever candidate interval sits nearer `guess`; an interval that
-  # contains the guess wins outright.
   defp closer(nil, interval, _guess), do: interval
 
   defp closer(best, interval, guess) do

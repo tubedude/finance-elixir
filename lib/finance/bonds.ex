@@ -18,7 +18,14 @@ defmodule Finance.Bonds do
   """
 
   import Finance.Shared,
-    only: [present_value: 2, round_value: 2, options: 1, resolve_solver: 1, unwrap!: 1]
+    only: [
+      present_value: 2,
+      discount_factor: 2,
+      round_value: 2,
+      options: 1,
+      resolve_solver: 1,
+      unwrap!: 1
+    ]
 
   @type error :: Finance.error()
   @type option :: Finance.option()
@@ -39,15 +46,11 @@ defmodule Finance.Bonds do
           {:ok, float} | {:error, error}
   def price(face, coupon_rate, ytm, years, freq \\ 2, opts \\ [])
       when is_number(face) and is_number(coupon_rate) and is_number(ytm) and is_number(years) and
-             is_number(freq) and is_list(opts) do
-    case periods_valid(years, freq) do
-      nil ->
-        {:error, :undefined}
-
-      n ->
-        opts = options(opts)
-        value = present_value(bond_flows(face, coupon_rate, n, freq), ytm / freq)
-        {:ok, round_value(value, opts)}
+             is_integer(freq) and is_list(opts) do
+    with {:ok, n} <- coupon_periods(years, freq),
+         :ok <- check_yield(ytm, freq) do
+      value = present_value(bond_flows(face, coupon_rate, n, freq), ytm / freq)
+      {:ok, round_value(value, options(opts))}
     end
   end
 
@@ -72,19 +75,19 @@ defmodule Finance.Bonds do
           {:ok, float} | {:error, error}
   def ytm(face, coupon_rate, price, years, freq \\ 2, opts \\ [])
       when is_number(face) and is_number(coupon_rate) and is_number(price) and is_number(years) and
-             is_number(freq) and is_list(opts) do
-    case periods_valid(years, freq) do
-      nil ->
-        {:error, :undefined}
+             is_integer(freq) and is_list(opts) do
+    with {:ok, n} <- coupon_periods(years, freq) do
+      opts = options(opts)
+      flows = [{0.0, -price * 1.0} | bond_flows(face, coupon_rate, n, freq)]
 
-      n ->
-        opts = options(opts)
-        flows = [{0.0, -price * 1.0} | bond_flows(face, coupon_rate, n, freq)]
+      # Solve the per-period rate at high precision, then round the annualized
+      # yield once. Rounding `periodic` first would let `freq` amplify that
+      # rounding error into the last reported digit.
+      solver_opts = Keyword.update!(opts, :precision, &max(&1, 12))
 
-        with {:ok, periodic} <- resolve_solver(opts).solve(flows, opts) do
-          # Annualize the per-period rate to the requested precision.
-          {:ok, round_value(periodic * freq, opts)}
-        end
+      with {:ok, periodic} <- resolve_solver(opts).solve(flows, solver_opts) do
+        {:ok, round_value(periodic * freq, opts)}
+      end
     end
   end
 
@@ -109,9 +112,9 @@ defmodule Finance.Bonds do
   @spec duration(number, number, number, pos_integer, [option]) ::
           {:ok, float} | {:error, error}
   def duration(coupon_rate, ytm, years, freq \\ 2, opts \\ [])
-      when is_number(coupon_rate) and is_number(ytm) and is_number(years) and is_number(freq) and
+      when is_number(coupon_rate) and is_number(ytm) and is_number(years) and is_integer(freq) and
              is_list(opts) do
-    with_metric(coupon_rate, years, freq, opts, fn flows ->
+    with_metric(coupon_rate, ytm, years, freq, opts, fn flows ->
       macaulay(flows, ytm / freq, freq)
     end)
   end
@@ -135,10 +138,10 @@ defmodule Finance.Bonds do
   @spec modified_duration(number, number, number, pos_integer, [option]) ::
           {:ok, float} | {:error, error}
   def modified_duration(coupon_rate, ytm, years, freq \\ 2, opts \\ [])
-      when is_number(coupon_rate) and is_number(ytm) and is_number(years) and is_number(freq) and
+      when is_number(coupon_rate) and is_number(ytm) and is_number(years) and is_integer(freq) and
              is_list(opts) do
-    with_metric(coupon_rate, years, freq, opts, fn flows ->
-      macaulay(flows, ytm / freq, freq) / (1 + ytm / freq)
+    with_metric(coupon_rate, ytm, years, freq, opts, fn flows ->
+      with {:ok, m} <- macaulay(flows, ytm / freq, freq), do: {:ok, m / (1 + ytm / freq)}
     end)
   end
 
@@ -161,9 +164,9 @@ defmodule Finance.Bonds do
   @spec convexity(number, number, number, pos_integer, [option]) ::
           {:ok, float} | {:error, error}
   def convexity(coupon_rate, ytm, years, freq \\ 2, opts \\ [])
-      when is_number(coupon_rate) and is_number(ytm) and is_number(years) and is_number(freq) and
+      when is_number(coupon_rate) and is_number(ytm) and is_number(years) and is_integer(freq) and
              is_list(opts) do
-    with_metric(coupon_rate, years, freq, opts, fn flows ->
+    with_metric(coupon_rate, ytm, years, freq, opts, fn flows ->
       convexity_value(flows, ytm / freq, freq)
     end)
   end
@@ -176,49 +179,63 @@ defmodule Finance.Bonds do
 
   # --- helpers -------------------------------------------------------------
 
-  # Shared shape for the risk metrics: validate periods, build unit-face flows,
-  # apply `fun`, and round. Keeps each public metric a one-liner.
-  defp with_metric(coupon_rate, years, freq, opts, fun) do
-    case periods_valid(years, freq) do
-      nil -> {:error, :undefined}
-      n -> {:ok, round_value(fun.(bond_flows(1, coupon_rate, n, freq)), options(opts))}
+  # Shared shape for the risk metrics; keeps each public metric a one-liner. `fun`
+  # returns `{:ok, value} | {:error, :undefined}` (undefined when the yield drives
+  # the unit-face price to zero, e.g. a negative coupon).
+  defp with_metric(coupon_rate, ytm, years, freq, opts, fun) do
+    with {:ok, n} <- coupon_periods(years, freq),
+         :ok <- check_yield(ytm, freq),
+         {:ok, value} <- fun.(bond_flows(1, coupon_rate, n, freq)) do
+      {:ok, round_value(value, options(opts))}
     end
   end
 
-  # Whole, positive coupon-period count, or nil when the inputs are degenerate.
-  defp periods_valid(years, freq) do
+  # Whole, positive coupon-period count.
+  defp coupon_periods(years, freq) do
     n = years * freq
     t = trunc(n)
-    if freq > 0 and n == t and t > 0, do: t, else: nil
+    if freq > 0 and n == t and t > 0, do: {:ok, t}, else: {:error, :undefined}
   end
 
+  # The per-period yield must keep `1 + ytm/freq` positive for discounting.
+  defp check_yield(ytm, freq) when 1 + ytm / freq <= 0, do: {:error, :undefined}
+  defp check_yield(_ytm, _freq), do: :ok
+
   # Coupon + redemption cash flows on `face`, as [{period, amount}], k = 1..n.
-  # The face value is added onto the final coupon at period n.
   defp bond_flows(face, coupon_rate, n, freq) do
     coupon = face * coupon_rate / freq
 
     Enum.map(1..n, fn k ->
       amount = if k == n, do: coupon + face, else: coupon
-      {k * 1.0, amount * 1.0}
+      {k * 1.0, amount}
     end)
   end
 
   defp weighted_pv(flows, r) do
-    Enum.map(flows, fn {k, cf} -> {k, cf / :math.pow(1 + r, k)} end)
+    Enum.map(flows, fn {k, cf} -> {k, cf * discount_factor(r, k)} end)
   end
 
   # Macaulay duration in years: PV-weighted average period, divided by freq.
+  # Undefined when the price side is non-positive (only a negative coupon can do it).
   defp macaulay(flows, r, freq) do
     weighted = weighted_pv(flows, r)
-    price = Enum.reduce(weighted, 0.0, fn {_k, pv}, acc -> acc + pv end)
-    Enum.reduce(weighted, 0.0, fn {k, pv}, acc -> acc + k * pv end) / price / freq
+    price = Enum.sum_by(weighted, fn {_k, pv} -> pv end)
+
+    if price <= 0.0,
+      do: {:error, :undefined},
+      else: {:ok, Enum.sum_by(weighted, fn {k, pv} -> k * pv end) / price / freq}
   end
 
   # Convexity in years²: the k·(k+1)-weighted PV sum, annualized by freq².
   defp convexity_value(flows, r, freq) do
     weighted = weighted_pv(flows, r)
-    price = Enum.reduce(weighted, 0.0, fn {_k, pv}, acc -> acc + pv end)
-    num = Enum.reduce(weighted, 0.0, fn {k, pv}, acc -> acc + k * (k + 1) * pv end)
-    num / price / :math.pow(1 + r, 2) / :math.pow(freq, 2)
+    price = Enum.sum_by(weighted, fn {_k, pv} -> pv end)
+
+    if price <= 0.0 do
+      {:error, :undefined}
+    else
+      num = Enum.sum_by(weighted, fn {k, pv} -> k * (k + 1) * pv end)
+      {:ok, num / price / :math.pow(1 + r, 2) / :math.pow(freq, 2)}
+    end
   end
 end

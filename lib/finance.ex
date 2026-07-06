@@ -23,18 +23,20 @@ defmodule Finance do
 
   ## Deprecated flat API
 
-  Every function is also available directly on `Finance` (e.g. `Finance.xirr/1`),
-  but those delegators are **deprecated** and will be removed in 2.0 — call the
-  domain module instead, for example:
+  The functions that lived directly on `Finance` before 1.2 (e.g. `Finance.xirr/1`)
+  still work, but those delegators are **deprecated** and will be removed in 2.0 —
+  call the domain module instead, for example:
 
       Finance.CashFlow.xirr([{~D[2019-01-01], -1000}, {~D[2020-01-01], 1100}])
       #=> {:ok, 0.1}
 
+  Functions added since 1.2 exist only on their domain module.
+
   ## Options
 
-  The rate-finding and value functions take an optional keyword list. Options are
-  validated with `nimble_options`: an unknown key or bad value raises, while
-  problems with the data come back as `{:error, reason}`.
+  The rate functions and the `npv`/`xnpv` value functions take an optional keyword
+  list. Options are validated with `nimble_options`: an unknown key or bad value
+  raises, while problems with the data come back as `{:error, reason}`.
 
   #{Finance.Shared.options_docs()}
   """

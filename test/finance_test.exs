@@ -18,6 +18,10 @@ defmodule FinanceTest do
   doctest Finance.Rates
   doctest Finance.Bonds
 
+  # Both shipped solvers must satisfy the same robustness contracts: the fuzz
+  # properties and the pathological corpus run against each.
+  @solvers [Finance.Solver.Newton, Finance.Solver.Brent]
+
   describe "module organization" do
     test "the solver is swappable via the :solver option" do
       assert Finance.CashFlow.irr([-1000, 1100], solver: StubSolver) == {:ok, 0.42}
@@ -141,12 +145,26 @@ defmodule FinanceTest do
       assert_raise NimbleOptions.ValidationError, fn ->
         Finance.CashFlow.npv(0.1, [-1000, 1100], precision: 1.5)
       end
+
+      # precision must be 0..15 — Float.round rejects more, so validation should too
+      assert_raise NimbleOptions.ValidationError, fn ->
+        Finance.CashFlow.irr([-1000, 1100], precision: 16)
+      end
+    end
+
+    test "an integer guess or tolerance is accepted" do
+      assert Finance.CashFlow.irr([-1000, 1100], guess: 1) == {:ok, 0.1}
+      assert {:ok, _rate} = Finance.CashFlow.irr([-1000, 1100], tolerance: 1)
     end
   end
 
   describe "errors" do
     test "mismatched list lengths" do
       assert Finance.CashFlow.xirr([{2014, 4, 15}, {2014, 10, 19}], [-10_000.0, 305.6, 500.0]) ==
+               {:error, :mismatched_lengths}
+
+      # An empty second list is the two-list form with no amounts, not options.
+      assert Finance.CashFlow.xirr([{2014, 4, 15}, {2014, 10, 19}], []) ==
                {:error, :mismatched_lengths}
     end
 
@@ -329,6 +347,10 @@ defmodule FinanceTest do
 
       assert {:ok, rate} = Finance.CashFlow.irr(series)
       assert_in_delta rate, 0.12, 1.0e-4
+
+      # Brent shares the interior-scan bracket, so it clears the even crossing too.
+      assert {:ok, brent} = Finance.CashFlow.irr(series, solver: Finance.Solver.Brent)
+      assert_in_delta brent, 0.12, 1.0e-4
     end
 
     test "the guess selects which root of a multi-IRR series is returned" do
@@ -643,6 +665,12 @@ defmodule FinanceTest do
 
       assert {:ok, rate} = Finance.CashFlow.xirr(flows, precision: 10)
       assert_dated_root(rate, flows)
+
+      # Brent's overflow guard handles the 1e9 magnitudes just as well.
+      assert {:ok, brent} =
+               Finance.CashFlow.xirr(flows, precision: 10, solver: Finance.Solver.Brent)
+
+      assert_dated_root(brent, flows)
     end
   end
 
@@ -807,6 +835,12 @@ defmodule FinanceTest do
       assert Finance.CashFlow.xnpv(0.1, []) == {:error, :insufficient_data}
     end
 
+    test "a rate at or below -100% is undefined, not a crash" do
+      flows = [{~D[2019-01-01], -1000}, {~D[2020-06-15], 1100}]
+      assert Finance.CashFlow.xnpv(-1.0, flows) == {:error, :undefined}
+      assert Finance.CashFlow.xnpv(-1.5, flows) == {:error, :undefined}
+    end
+
     test "xnpv!/2 returns the bare value and raises on error" do
       assert Finance.CashFlow.xnpv!(0.1, [{~D[2019-01-01], -1000}, {~D[2020-01-01], 1100}]) == 0.0
       assert_raise ArgumentError, fn -> Finance.CashFlow.xnpv!(0.1, []) end
@@ -853,6 +887,11 @@ defmodule FinanceTest do
       assert Finance.CashFlow.npv(0.1, []) == {:error, :insufficient_data}
     end
 
+    test "a rate at or below -100% is undefined, not a crash" do
+      assert Finance.CashFlow.npv(-1.0, [-1000, 1100]) == {:error, :undefined}
+      assert Finance.CashFlow.npv(-1.5, [-1000, 1100]) == {:error, :undefined}
+    end
+
     test "npv!/2 returns the bare value" do
       assert Finance.CashFlow.npv!(0.1, [-1000, 1100]) == 0.0
     end
@@ -867,6 +906,11 @@ defmodule FinanceTest do
     test "requires both an inflow and an outflow" do
       assert Finance.CashFlow.mirr([100, 200], 0.1, 0.1) == {:error, :single_signed_flow}
       assert Finance.CashFlow.mirr([-100], 0.1, 0.1) == {:error, :insufficient_data}
+    end
+
+    test "a rate at or below -100% is undefined, not a crash" do
+      assert Finance.CashFlow.mirr([-100, 200], -1.0, 0.1) == {:error, :undefined}
+      assert Finance.CashFlow.mirr([-100, 200], 0.1, -1.5) == {:error, :undefined}
     end
 
     test "mirr!/3 returns the bare rate" do
@@ -982,6 +1026,15 @@ defmodule FinanceTest do
       assert Finance.TVM.rate(10.5, -100, 1000) == {:error, :undefined}
     end
 
+    test "a rate at or below -100% is undefined, not a crash" do
+      assert Finance.TVM.fv(-1.0, 10, -100, 0) == {:error, :undefined}
+      assert Finance.TVM.pv(-1.0, 10, -100, 0) == {:error, :undefined}
+      assert Finance.TVM.pmt(-1.0, 10, 1000) == {:error, :undefined}
+      assert Finance.TVM.fv(-2.0, 10, -100, 0) == {:error, :undefined}
+      assert Finance.TVM.pv(-1.5, 10, -100, 0) == {:error, :undefined}
+      assert Finance.TVM.pmt(-1.5, 10, 1000) == {:error, :undefined}
+    end
+
     test "bang variants return bare values and raise" do
       assert Finance.TVM.fv!(0.0, 10, -100, 0) == 1000.0
       assert Finance.TVM.pv!(0.0, 10, -100, 0) == 1000.0
@@ -1020,6 +1073,7 @@ defmodule FinanceTest do
     test "straight-line spreads the loss evenly" do
       assert Finance.Depreciation.sln(10_000, 1_000, 5) == {:ok, 1800.0}
       assert Finance.Depreciation.sln(10_000, 1_000, 0) == {:error, :undefined}
+      assert Finance.Depreciation.sln(10_000, 1_000, -5) == {:error, :undefined}
       assert Finance.Depreciation.sln!(10_000, 1_000, 5) == 1800.0
     end
 
@@ -1037,6 +1091,8 @@ defmodule FinanceTest do
       assert Finance.Depreciation.syd(10_000, 1_000, 5, 6) == {:error, :undefined}
       assert Finance.Depreciation.syd(10_000, 1_000, 5, 0) == {:error, :undefined}
       assert Finance.Depreciation.syd(10_000, 1_000, 0, 1) == {:error, :undefined}
+      # a fractional period is rejected, matching ddb/db
+      assert Finance.Depreciation.syd(10_000, 1_000, 5, 2.5) == {:error, :undefined}
       assert_raise ArgumentError, fn -> Finance.Depreciation.syd!(10_000, 1_000, 5, 6) end
     end
 
@@ -1111,14 +1167,20 @@ defmodule FinanceTest do
       assert Finance.Returns.discounted_payback_period([-1000, 100, 100], 0.1) ==
                {:error, :undefined}
 
+      # a rate at or below -100% is undefined, not a crash
+      assert Finance.Returns.discounted_payback_period([-1000, 600, 600], -1.0) ==
+               {:error, :undefined}
+
       assert Finance.Returns.discounted_payback_period!([-1000, 600, 600, 600], 0.1) == 1.916667
     end
 
-    test "profitability_index reuses npv" do
+    test "profitability_index" do
       assert Finance.Returns.profitability_index([-1000, 600, 600], 0.1) == {:ok, 1.041322}
       assert Finance.Returns.profitability_index([-1000, 1100], 0.1) == {:ok, 1.0}
       assert Finance.Returns.profitability_index([1000, 600], 0.1) == {:error, :undefined}
       assert Finance.Returns.profitability_index([], 0.1) == {:error, :insufficient_data}
+      # a rate at or below -100% is undefined, not a crash
+      assert Finance.Returns.profitability_index([-1000, 600], -1.0) == {:error, :undefined}
       assert Finance.Returns.profitability_index!([-1000, 600, 600], 0.1) == 1.041322
     end
 
@@ -1128,6 +1190,8 @@ defmodule FinanceTest do
       assert Finance.Returns.twr([0.02, 0.02], periods_per_year: 4) == {:ok, 0.082432}
       assert Finance.Returns.twr([]) == {:error, :insufficient_data}
       assert Finance.Returns.twr([0.1, "x"]) == {:error, :undefined}
+      # a period return below -100% has no meaning
+      assert Finance.Returns.twr([-2.5, 0.1], periods_per_year: 4) == {:error, :undefined}
       assert Finance.Returns.twr!([0.10, -0.05, 0.08]) == 0.1286
       assert_raise ArgumentError, fn -> Finance.Returns.twr!([]) end
     end
@@ -1236,6 +1300,18 @@ defmodule FinanceTest do
       assert Finance.Bonds.ytm(100, 0.05, 100.0, 10) == {:ok, 0.05}
     end
 
+    test "the annual yield is rounded once, not twice through the period rate" do
+      # A discount bond whose period yield sits on a rounding boundary. Rounding
+      # the period rate to :precision and *then* annualizing (the pre-1.6.1 path)
+      # let `freq` carry that rounding into the last reported digit — off by one
+      # unit at freq: 2, and by three at freq: 12. Solving the period rate at high
+      # precision and rounding the product once gives the right last digit.
+      assert Finance.Bonds.ytm(100, 0.03, 83.4, 3, 2) == {:ok, 0.094875}
+      # pre-1.6.1 double-rounding returned 0.094874
+      assert Finance.Bonds.ytm(100, 0.03, 83.4, 3, 12) == {:ok, 0.093687}
+      # pre-1.6.1 double-rounding returned 0.093684
+    end
+
     test "degenerate maturity is undefined across the module" do
       assert Finance.Bonds.price(100, 0.05, 0.05, 0) == {:error, :undefined}
       assert Finance.Bonds.ytm(100, 0.05, 100.0, -1) == {:error, :undefined}
@@ -1245,6 +1321,19 @@ defmodule FinanceTest do
       # a fractional number of coupon periods is also undefined
       assert Finance.Bonds.price(100, 0.05, 0.05, 2.5, 1) == {:error, :undefined}
       assert Finance.Bonds.price(100, 0.05, 0.05, 10, 0) == {:error, :undefined}
+    end
+
+    test "a yield at or below -100% per period is undefined, not a crash" do
+      assert Finance.Bonds.price(100, 0.05, -2.0, 10, 2) == {:error, :undefined}
+      assert Finance.Bonds.price(100, 0.05, -3.0, 10, 2) == {:error, :undefined}
+    end
+
+    test "a negative coupon that zeroes the price makes the risk metrics undefined" do
+      # A steeply negative coupon drives the unit-face price to ~0, so the
+      # divide-by-price in duration/convexity has no meaningful value.
+      assert Finance.Bonds.duration(-0.5, 0.05, 30, 1) == {:error, :undefined}
+      assert Finance.Bonds.modified_duration(-0.5, 0.05, 30, 1) == {:error, :undefined}
+      assert Finance.Bonds.convexity(-0.5, 0.05, 30, 1) == {:error, :undefined}
     end
 
     test "ytm does not converge when no yield brackets the price" do
@@ -1309,8 +1398,13 @@ defmodule FinanceTest do
 
     test "undefined for non-positive frequency or effective <= -1" do
       assert Finance.Rates.effective_annual_rate(0.10, 0) == {:error, :undefined}
+      # A nominal rate so negative the compounded base goes negative (would raise
+      # for a fractional frequency) is undefined, not a crash.
+      assert Finance.Rates.effective_annual_rate(-3.0, 2.5) == {:error, :undefined}
       assert Finance.Rates.nominal_rate(0.10, 0) == {:error, :undefined}
       assert Finance.Rates.nominal_rate(-1.5, 12) == {:error, :undefined}
+      # total loss (effective = -100%) is the inverse of ear = -1, not undefined
+      assert Finance.Rates.nominal_rate(-1.0, 12) == {:ok, -12.0}
       assert Finance.Rates.continuous_to_periodic(0.1, 0) == {:error, :undefined}
     end
 
@@ -1368,6 +1462,14 @@ defmodule FinanceTest do
     test "rejects a non-positive or non-integer term" do
       assert Finance.TVM.amortization_schedule(0.05, 0, 1000) == {:error, :undefined}
       assert Finance.TVM.amortization_schedule(0.05, 2.5, 1000) == {:error, :undefined}
+    end
+
+    test "rejects a non-positive principal or a rate at/below -100%" do
+      # A loan is a positive pv above -100%; outside that the schedule is undefined
+      # (and pmt can divide by zero) — reject rather than return wrong rows.
+      assert Finance.TVM.amortization_schedule(0.05, 12, 0) == {:error, :undefined}
+      assert Finance.TVM.amortization_schedule(0.05, 12, -1000) == {:error, :undefined}
+      assert Finance.TVM.amortization_schedule(-1.0, 12, 1000) == {:error, :undefined}
     end
 
     test "bang variant returns the rows and raises on error" do
@@ -1433,8 +1535,12 @@ defmodule FinanceTest do
         finish = Date.add(start, 365 * years)
         payout = principal * :math.pow(1 + rate, years)
 
-        assert {:ok, found} = Finance.CashFlow.xirr([{start, -principal}, {finish, payout}])
-        assert_in_delta found, rate, 1.0e-3
+        for solver <- @solvers do
+          assert {:ok, found} =
+                   Finance.CashFlow.xirr([{start, -principal}, {finish, payout}], solver: solver)
+
+          assert_in_delta found, rate, 1.0e-3
+        end
       end
     end
 
@@ -1446,16 +1552,18 @@ defmodule FinanceTest do
             ) do
         flows = [{~D[2000-01-01], outflow}, {Date.add(~D[2000-01-01], days), inflow}]
 
-        case Finance.CashFlow.xirr(flows, precision: 10) do
-          # Near a total-loss rate (1 + r ≈ 0) discounting is numerically
-          # singular: tiny rounding in `r` blows up the discount factor. Skip
-          # those degenerate cases — they say nothing about the identity.
-          {:ok, rate} when 1 + rate > 0.01 ->
-            assert {:ok, value} = Finance.CashFlow.xnpv(rate, flows, precision: 10)
-            assert_in_delta value, 0.0, 1.0e-2 * (abs(inflow) + 1)
+        for solver <- @solvers do
+          case Finance.CashFlow.xirr(flows, precision: 10, solver: solver) do
+            # Near a total-loss rate (1 + r ≈ 0) discounting is numerically
+            # singular: tiny rounding in `r` blows up the discount factor. Skip
+            # those degenerate cases — they say nothing about the identity.
+            {:ok, rate} when 1 + rate > 0.01 ->
+              assert {:ok, value} = Finance.CashFlow.xnpv(rate, flows, precision: 10)
+              assert_in_delta value, 0.0, 1.0e-2 * (abs(inflow) + 1)
 
-          _ ->
-            :ok
+            _ ->
+              :ok
+          end
         end
       end
     end
@@ -1471,14 +1579,16 @@ defmodule FinanceTest do
         # A high-precision rate keeps rounding error negligible even where the
         # discount factor is steep; the guard still skips the 1 + r ≈ 0
         # singularity, where any rounding makes the factor explode.
-        case Finance.CashFlow.xirr(flows, precision: 10) do
-          {:ok, rate} when 1 + rate > 0.01 ->
-            t = days / 365.0
-            npv = outflow + inflow / :math.pow(1 + rate, t)
-            assert_in_delta npv, 0.0, 1.0e-2 * (abs(inflow) + 1)
+        for solver <- @solvers do
+          case Finance.CashFlow.xirr(flows, precision: 10, solver: solver) do
+            {:ok, rate} when 1 + rate > 0.01 ->
+              t = days / 365.0
+              npv = outflow + inflow / :math.pow(1 + rate, t)
+              assert_in_delta npv, 0.0, 1.0e-2 * (abs(inflow) + 1)
 
-          _ ->
-            :ok
+            _ ->
+              :ok
+          end
         end
       end
     end
@@ -1498,13 +1608,15 @@ defmodule FinanceTest do
         outlay = present_value_at(rate, Enum.with_index(inflows, 1))
         flows = [-outlay | inflows]
 
-        case Finance.CashFlow.irr(flows, precision: 12) do
-          {:ok, found} ->
-            npv = present_value_at(found, Enum.with_index(flows, 0))
-            assert_in_delta npv, 0.0, 1.0e-4 * (abs(outlay) + 1)
+        for solver <- @solvers do
+          case Finance.CashFlow.irr(flows, precision: 12, solver: solver) do
+            {:ok, found} ->
+              npv = present_value_at(found, Enum.with_index(flows, 0))
+              assert_in_delta npv, 0.0, 1.0e-4 * (abs(outlay) + 1)
 
-          {:error, reason} ->
-            assert reason in [:did_not_converge, :single_signed_flow, :insufficient_data]
+            {:error, reason} ->
+              assert reason in [:did_not_converge, :single_signed_flow, :insufficient_data]
+          end
         end
       end
     end
@@ -1515,20 +1627,22 @@ defmodule FinanceTest do
     # (a real root) or one of the documented errors.
     property "irr never crashes on arbitrary flows; any rate it returns brackets a real root" do
       check all(amounts <- list_of(integer(-1_000_000..1_000_000), max_length: 30)) do
-        case Finance.CashFlow.irr(amounts, precision: 10) do
-          {:ok, rate} ->
-            assert is_float(rate) and rate > -1.0
-            indexed = Enum.with_index(amounts, 0)
-            # Assert a zero-crossing rather than the NPV magnitude: a steep NPV is
-            # large even a hair from its root, whereas a spurious non-root shows
-            # no crossing at all. The window sits well inside the (-1, ∞) domain.
-            h = min(max(abs(rate), 1.0) * 1.0e-6, (1.0 + rate) / 2)
-            below = present_value_at(rate - h, indexed)
-            above = present_value_at(rate + h, indexed)
-            assert (below <= 0 and above >= 0) or (below >= 0 and above <= 0)
+        for solver <- @solvers do
+          case Finance.CashFlow.irr(amounts, precision: 10, solver: solver) do
+            {:ok, rate} ->
+              assert is_float(rate) and rate > -1.0
+              indexed = Enum.with_index(amounts, 0)
+              # Assert a zero-crossing rather than the NPV magnitude: a steep NPV is
+              # large even a hair from its root, whereas a spurious non-root shows
+              # no crossing at all. The window sits well inside the (-1, ∞) domain.
+              h = min(max(abs(rate), 1.0) * 1.0e-6, (1.0 + rate) / 2)
+              below = present_value_at(rate - h, indexed)
+              above = present_value_at(rate + h, indexed)
+              assert (below <= 0 and above >= 0) or (below >= 0 and above <= 0)
 
-          {:error, reason} ->
-            assert reason in [:insufficient_data, :single_signed_flow, :did_not_converge]
+            {:error, reason} ->
+              assert reason in [:insufficient_data, :single_signed_flow, :did_not_converge]
+          end
         end
       end
     end
@@ -1543,8 +1657,49 @@ defmodule FinanceTest do
             ) do
         rate = rate_bp / 10_000
         assert {:ok, pv} = Finance.TVM.pv(rate, nper, pmt, 0.0, 0)
-        assert {:ok, found} = Finance.TVM.rate(nper, pmt, pv, 0.0, 0, precision: 10)
-        assert_in_delta found, rate, 1.0e-4
+
+        for solver <- @solvers do
+          assert {:ok, found} =
+                   Finance.TVM.rate(nper, pmt, pv, 0.0, 0, precision: 10, solver: solver)
+
+          assert_in_delta found, rate, 1.0e-4
+        end
+      end
+    end
+
+    # The dated (XIRR) analog of the arbitrary-flows property above: long,
+    # irregularly-spaced series with random signs — exercising `normalize/1`'s
+    # date→year conversion, same-date merging, and the solver over non-integer
+    # spacing. Whatever the solver returns must bracket a real XNPV root.
+    property "xirr on long, irregularly-spaced, random-sign flows brackets a real XNPV root" do
+      check all(
+              raw <-
+                list_of(tuple({integer(0..7300), integer(-1_000_000..1_000_000)}),
+                  min_length: 2,
+                  max_length: 30
+                ),
+              max_runs: 200
+            ) do
+        base = ~D[2000-01-01]
+        flows = Enum.map(raw, fn {day, amount} -> {Date.add(base, day), amount} end)
+
+        for solver <- @solvers do
+          case Finance.CashFlow.xirr(flows, precision: 12, solver: solver) do
+            {:ok, rate} when 1 + rate > 0.01 ->
+              # Sign change of the XNPV around the root, not its magnitude — steep
+              # roots are large a hair away, while a spurious non-root never crosses.
+              h = min(max(abs(rate), 1.0) * 1.0e-6, (1.0 + rate) / 2)
+              {:ok, below} = Finance.CashFlow.xnpv(rate - h, flows, precision: 12)
+              {:ok, above} = Finance.CashFlow.xnpv(rate + h, flows, precision: 12)
+              assert (below <= 0 and above >= 0) or (below >= 0 and above <= 0)
+
+            {:ok, _rate} ->
+              :ok
+
+            {:error, reason} ->
+              assert reason in [:did_not_converge, :single_signed_flow, :insufficient_data]
+          end
+        end
       end
     end
 

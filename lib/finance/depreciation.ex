@@ -25,10 +25,10 @@ defmodule Finance.Depreciation do
   @spec sln(number, number, number) :: {:ok, float} | {:error, error}
   def sln(cost, salvage, life)
       when is_number(cost) and is_number(salvage) and is_number(life) do
-    if life == 0 do
+    if life <= 0 do
       {:error, :undefined}
     else
-      {:ok, (cost - salvage) / life * 1.0}
+      {:ok, (cost - salvage) / life}
     end
   end
 
@@ -54,10 +54,12 @@ defmodule Finance.Depreciation do
   @spec syd(number, number, number, number) :: {:ok, float} | {:error, error}
   def syd(cost, salvage, life, period)
       when is_number(cost) and is_number(salvage) and is_number(life) and is_number(period) do
-    if life <= 0 or period < 1 or period > life do
+    n = trunc(period)
+
+    if life <= 0 or period != n or n < 1 or n > life do
       {:error, :undefined}
     else
-      {:ok, (cost - salvage) * (life - period + 1) * 2 / (life * (life + 1)) * 1.0}
+      {:ok, (cost - salvage) * (life - period + 1) * 2 / (life * (life + 1))}
     end
   end
 

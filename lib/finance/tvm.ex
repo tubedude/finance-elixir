@@ -57,12 +57,11 @@ defmodule Finance.TVM do
   def fv(rate, nper, pmt, pv \\ 0.0, type \\ 0)
       when is_number(rate) and is_number(nper) and is_number(pmt) and is_number(pv) and
              type in [0, 1] do
-    value =
-      if rate == 0,
-        do: -(pv + pmt * nper),
-        else: -(pv * :math.pow(1 + rate, nper) + pmt * annuity(rate, nper, type))
-
-    {:ok, value * 1.0}
+    cond do
+      rate == 0 -> {:ok, -(pv + pmt * nper) + 0.0}
+      1 + rate <= 0 -> {:error, :undefined}
+      true -> {:ok, -(pv * :math.pow(1 + rate, nper) + pmt * annuity(rate, nper, type)) + 0.0}
+    end
   end
 
   @doc "Same as `fv/5`, but returns the value directly and raises `ArgumentError` on error."
@@ -86,12 +85,11 @@ defmodule Finance.TVM do
   def pv(rate, nper, pmt, fv \\ 0.0, type \\ 0)
       when is_number(rate) and is_number(nper) and is_number(pmt) and is_number(fv) and
              type in [0, 1] do
-    value =
-      if rate == 0,
-        do: -(fv + pmt * nper),
-        else: -(fv + pmt * annuity(rate, nper, type)) / :math.pow(1 + rate, nper)
-
-    {:ok, value * 1.0}
+    cond do
+      rate == 0 -> {:ok, -(fv + pmt * nper) + 0.0}
+      1 + rate <= 0 -> {:error, :undefined}
+      true -> {:ok, -(fv + pmt * annuity(rate, nper, type)) / :math.pow(1 + rate, nper) + 0.0}
+    end
   end
 
   @doc "Same as `pv/5`, but returns the value directly and raises `ArgumentError` on error."
@@ -117,8 +115,9 @@ defmodule Finance.TVM do
              type in [0, 1] do
     cond do
       nper == 0 -> {:error, :undefined}
-      rate == 0 -> {:ok, -(pv + fv) / nper * 1.0}
-      true -> {:ok, -(pv * :math.pow(1 + rate, nper) + fv) / annuity(rate, nper, type) * 1.0}
+      rate == 0 -> {:ok, -(pv + fv) / nper + 0.0}
+      1 + rate <= 0 -> {:error, :undefined}
+      true -> {:ok, -(pv * :math.pow(1 + rate, nper) + fv) / annuity(rate, nper, type) + 0.0}
     end
   end
 
@@ -232,14 +231,21 @@ defmodule Finance.TVM do
   def amortization_schedule(rate, nper, pv, opts \\ [])
       when (is_number(rate) or is_struct(rate, Decimal)) and is_number(nper) and
              (is_number(pv) or is_struct(pv, Decimal)) and is_list(opts) do
+    opts = NimbleOptions.validate!(opts, @schedule_options_schema)
     n = trunc(nper)
 
-    if nper == n and n >= 1 do
-      opts = NimbleOptions.validate!(opts, @schedule_options_schema)
+    if valid_loan?(nper, n, pv, rate) do
       {:ok, build_schedule(rate, n, pv, Keyword.fetch!(opts, :precision))}
     else
       {:error, :undefined}
     end
+  end
+
+  # A loan is a whole number of periods with a positive `pv` at a rate above -100%.
+  # Outside that the level payment and the balance clamp are undefined (and `pmt`
+  # can divide by zero), so the schedule is rejected rather than returned wrong.
+  defp valid_loan?(nper, n, pv, rate) do
+    nper == n and n >= 1 and to_float(pv) > 0.0 and to_float(rate) > -1.0
   end
 
   @doc "Same as `amortization_schedule/4`, but returns the rows directly and raises `ArgumentError` on error."
@@ -266,9 +272,21 @@ defmodule Finance.TVM do
     pv = to_float(pv)
     {:ok, payment} = pmt(rate, nper, pv)
 
-    rows = integer_schedule(rate, nper, round(pv * scale), round(payment * scale))
-    converter = if decimal?, do: &row_to_decimal(&1, scale), else: &row_to_float(&1, scale)
-    Enum.map(rows, converter)
+    convert = if decimal?, do: &units_to_decimal(&1, scale), else: &(&1 / scale)
+
+    rate
+    |> integer_schedule(nper, round(pv * scale), round(payment * scale))
+    |> Enum.map(&convert_row(&1, convert))
+  end
+
+  defp convert_row({period, payment, interest, principal, balance}, convert) do
+    %{
+      period: period,
+      payment: convert.(payment),
+      interest: convert.(interest),
+      principal: convert.(principal),
+      balance: convert.(balance)
+    }
   end
 
   # Running balance in integer minor units; the final row pays off whatever
@@ -296,26 +314,6 @@ defmodule Finance.TVM do
   # and never pay off more than is owed (`max(_, -balance)`), so it moves toward
   # zero without overshooting. A normal amortizing payment already falls in range.
   defp clamp_to_balance(scheduled, balance), do: scheduled |> max(-balance) |> min(0)
-
-  defp row_to_float({period, payment, interest, principal, balance}, scale) do
-    %{
-      period: period,
-      payment: payment / scale,
-      interest: interest / scale,
-      principal: principal / scale,
-      balance: balance / scale
-    }
-  end
-
-  defp row_to_decimal({period, payment, interest, principal, balance}, scale) do
-    %{
-      period: period,
-      payment: units_to_decimal(payment, scale),
-      interest: units_to_decimal(interest, scale),
-      principal: units_to_decimal(principal, scale),
-      balance: units_to_decimal(balance, scale)
-    }
-  end
 
   defp units_to_decimal(units, scale), do: Decimal.div(Decimal.new(units), scale)
 
@@ -385,7 +383,7 @@ defmodule Finance.TVM do
     nper |> rate(pmt, pv, fv, type, opts) |> unwrap!()
   end
 
-  # (1 + r·type) · ((1+r)^n − 1) / r — the annuity factor that multiplies pmt.
+  # The annuity factor that multiplies pmt in the moduledoc equation.
   defp annuity(rate, nper, type) do
     (1 + rate * type) * (:math.pow(1 + rate, nper) - 1) / rate
   end
@@ -407,7 +405,7 @@ defmodule Finance.TVM do
     payment_periods = if type == 1, do: 0..(nper - 1), else: 1..nper
 
     payment_periods
-    |> Enum.reduce(%{}, fn i, acc -> Map.update(acc, i * 1.0, pmt * 1.0, &(&1 + pmt)) end)
+    |> Map.new(&{&1 * 1.0, pmt * 1.0})
     |> Map.update(0.0, pv * 1.0, &(&1 + pv))
     |> Map.update(nper * 1.0, fv * 1.0, &(&1 + fv))
     |> Map.to_list()

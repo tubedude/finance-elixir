@@ -30,6 +30,7 @@ defmodule Finance.CashFlow do
       options: 1,
       resolve_solver: 1,
       present_value: 2,
+      discount_factor: 2,
       check_currency: 1
     ]
 
@@ -76,7 +77,7 @@ defmodule Finance.CashFlow do
   @spec xirr([cash_flow], [option]) :: {:ok, rate} | {:error, error}
   @spec xirr([date], [amount]) :: {:ok, rate} | {:error, error}
   def xirr(first, second) when is_list(first) and is_list(second) do
-    if options?(second) do
+    if pairs?(first) and options?(second) do
       compute(first, second)
     else
       zip(first, second, [])
@@ -165,7 +166,8 @@ defmodule Finance.CashFlow do
       when is_number(rate) and is_list(cash_flows) and is_list(opts) do
     opts = options(opts)
 
-    with {:ok, flows} <- normalize(cash_flows) do
+    with :ok <- check_rate(rate),
+         {:ok, flows} <- normalize(cash_flows) do
       {:ok, round_value(present_value(flows, rate), opts)}
     end
   end
@@ -263,7 +265,8 @@ defmodule Finance.CashFlow do
       when is_number(rate) and is_list(amounts) and is_list(opts) do
     opts = options(opts)
 
-    with :ok <- check_currency(amounts) do
+    with :ok <- check_rate(rate),
+         :ok <- check_currency(amounts) do
       {:ok, round_value(present_value(periodic_flows(amounts), rate), opts)}
     end
   end
@@ -301,7 +304,8 @@ defmodule Finance.CashFlow do
       cond do
         n < 2 -> {:error, :insufficient_data}
         not signed_both_ways?(values) -> {:error, :single_signed_flow}
-        true -> {:ok, round_value(modified_irr(values, finance_rate, reinvest_rate, n), opts)}
+        1 + finance_rate <= 0 or 1 + reinvest_rate <= 0 -> {:error, :undefined}
+        true -> {:ok, round_value(modified_irr(values, finance_rate, reinvest_rate), opts)}
       end
     end
   end
@@ -312,34 +316,38 @@ defmodule Finance.CashFlow do
     amounts |> mirr(finance_rate, reinvest_rate, opts) |> unwrap!()
   end
 
-  defp modified_irr(values, finance_rate, reinvest_rate, n) do
-    periods = n - 1
+  defp modified_irr(values, finance_rate, reinvest_rate) do
+    periods = length(values) - 1
+    indexed = Enum.with_index(values)
 
     future_of_inflows =
-      values
-      |> Enum.with_index()
-      |> Enum.reduce(0.0, fn {value, i}, acc ->
-        if value > 0, do: acc + value * :math.pow(1 + reinvest_rate, periods - i), else: acc
-      end)
+      indexed
+      |> Enum.filter(fn {value, _i} -> value > 0 end)
+      |> Enum.sum_by(fn {value, i} -> value * :math.pow(1 + reinvest_rate, periods - i) end)
 
     present_of_outflows =
-      values
-      |> Enum.with_index()
-      |> Enum.reduce(0.0, fn {value, i}, acc ->
-        if value < 0, do: acc + value / :math.pow(1 + finance_rate, i), else: acc
-      end)
+      indexed
+      |> Enum.filter(fn {value, _i} -> value < 0 end)
+      |> Enum.sum_by(fn {value, i} -> value * discount_factor(finance_rate, i) end)
 
     :math.pow(future_of_inflows / -present_of_outflows, 1 / periods) - 1
   end
 
   # === Dispatch & normalization ============================================
 
-  # An empty list or a proper keyword list is treated as options. A list of
-  # `{date, amount}` pairs is not a keyword list (its keys are dates, not
-  # atoms), and a list of numeric amounts is not either — so the two input
-  # shapes are never confused.
+  # `xirr(first, second)` is `xirr(pairs, opts)` only when `first` is a list of
+  # `{date, amount}` pairs and `second` is options; otherwise it's the two-list
+  # `xirr(dates, amounts)` form. A `{date, amount}` pair is a 2-tuple, while a bare
+  # date is a `%Date{}` or a `{y, m, d}` 3-tuple, so the head disambiguates.
+  defp pairs?([]), do: true
+  defp pairs?(list), do: match?([{_, _} | _], list)
+
   defp options?([]), do: true
   defp options?(list), do: Keyword.keyword?(list)
+
+  # A discount rate at or below -100% has no meaningful `(1 + rate)^t`.
+  defp check_rate(rate) when 1 + rate <= 0, do: {:error, :undefined}
+  defp check_rate(_rate), do: :ok
 
   defp zip(dates, values, opts) when length(dates) == length(values) do
     dates |> Enum.zip(values) |> compute(opts)
@@ -397,8 +405,10 @@ defmodule Finance.CashFlow do
   defp normalize([]), do: {:error, :insufficient_data}
 
   defp normalize(cash_flows) do
-    with :ok <- check_currency(Enum.map(cash_flows, fn {_date, amount} -> amount end)) do
-      parsed = Enum.map(cash_flows, fn {date, amount} -> {to_date(date), to_amount(amount)} end)
+    amounts = Enum.map(cash_flows, fn {_date, amount} -> amount end)
+
+    with :ok <- check_currency(amounts),
+         {:ok, parsed} <- parse_dates(cash_flows) do
       min_date = parsed |> Enum.map(&elem(&1, 0)) |> Enum.min(Date)
 
       flows =
@@ -407,33 +417,39 @@ defmodule Finance.CashFlow do
           period = Date.diff(date, min_date) / @days_in_year
           Map.update(acc, period, amount, &(&1 + amount))
         end)
-        |> Map.to_list()
+        |> Enum.sort()
 
       {:ok, flows}
     end
-  rescue
-    _ in [ArgumentError, FunctionClauseError] -> {:error, :invalid_date}
   end
 
-  # Build position-indexed flows (period 0, 1, 2, …) for the periodic functions.
+  # A malformed amount is a caller bug, left to raise rather than be reported as an
+  # :invalid_date.
+  defp parse_dates(cash_flows) do
+    Enum.reduce_while(cash_flows, {:ok, []}, fn {date, amount}, {:ok, acc} ->
+      case to_date(date) do
+        {:ok, parsed_date} -> {:cont, {:ok, [{parsed_date, to_amount(amount)} | acc]}}
+        {:error, _reason} -> {:halt, {:error, :invalid_date}}
+      end
+    end)
+  end
+
   defp periodic_flows(amounts) do
     amounts
     |> Enum.with_index()
     |> Enum.map(fn {amount, index} -> {index / 1, to_amount(amount)} end)
   end
 
-  defp to_date(%Date{} = date), do: date
-  defp to_date({y, m, d}), do: Date.from_erl!({y, m, d})
+  defp to_date(%Date{} = date), do: {:ok, date}
+  defp to_date({y, m, d}), do: Date.from_erl({y, m, d})
 
-  defp validate(flows) do
-    amounts = Enum.map(flows, &elem(&1, 1))
-
-    cond do
-      length(flows) < 2 -> {:error, :insufficient_data}
-      not signed_both_ways?(amounts) -> {:error, :single_signed_flow}
-      true -> :ok
-    end
+  defp validate([_, _ | _] = flows) do
+    if signed_both_ways?(Enum.map(flows, &elem(&1, 1))),
+      do: :ok,
+      else: {:error, :single_signed_flow}
   end
+
+  defp validate(_flows), do: {:error, :insufficient_data}
 
   defp signed_both_ways?(amounts) do
     Enum.any?(amounts, &(&1 > 0)) and Enum.any?(amounts, &(&1 < 0))

@@ -19,7 +19,7 @@ defmodule Finance.Solver.Brent do
 
   @behaviour Finance.Solver
 
-  import Finance.Shared, only: [present_value: 2]
+  import Finance.Shared, only: [present_value: 2, round_value: 2, safely: 1]
 
   # Machine epsilon for doubles, for the convergence tolerance.
   @eps 2.220446049250313e-16
@@ -27,24 +27,13 @@ defmodule Finance.Solver.Brent do
   @impl Finance.Solver
   def solve(flows, opts) do
     case safely(fn -> zbrent(flows, opts) end) do
-      # `+ 0.0` collapses a negative zero (a rate that converges to 0 from below).
-      {:ok, rate} -> {:ok, Float.round(rate, Keyword.fetch!(opts, :precision)) + 0.0}
+      {:ok, rate} -> {:ok, round_value(rate, opts)}
       :diverged -> {:error, :did_not_converge}
     end
   end
 
-  # Pure-Elixir batch: chunk the work across the schedulers (see
-  # `Finance.Shared.solve_batch/2`).
   @impl Finance.Solver
   def solve_many(batch, opts), do: Finance.Shared.solve_batch(batch, &solve(&1, opts))
-
-  # An arithmetic overflow at extreme rates on long-dated flows is treated as a
-  # failure to converge rather than crashing the solve.
-  defp safely(fun) do
-    fun.()
-  rescue
-    ArithmeticError -> :diverged
-  end
 
   defp zbrent(flows, opts) do
     tol = Keyword.fetch!(opts, :tolerance)
@@ -68,8 +57,8 @@ defmodule Finance.Solver.Brent do
 
   defp brent(flows, {a, b, c, fa, fb, fc, d, e}, tol, iters) do
     # Keep c on the far side of the root from b, and make b the closer estimate.
-    {a, c, fa, fc, d, e} =
-      if same_sign?(fb, fc), do: {a, a, fa, fa, b - a, b - a}, else: {a, c, fa, fc, d, e}
+    {c, fc, d, e} =
+      if same_sign?(fb, fc), do: {a, fa, b - a, b - a}, else: {c, fc, d, e}
 
     {a, b, c, fa, fb, fc} =
       if abs(fc) < abs(fb), do: {b, c, b, fb, fc, fb}, else: {a, b, c, fa, fb, fc}
