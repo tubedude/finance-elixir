@@ -9,15 +9,19 @@ jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         include:
-          - elixir: "1.18"
-            otp: "27"
-          - elixir: "1.20"
-            otp: "29"
+          - elixir: "1.15.8"
+            otp: "25.3.2.21"
+          - elixir: "1.18.4"
+            otp: "27.3.4.13"
+          - elixir: "1.20.1"
+            otp: "29.0.2"
+            lint: true
           # Exercise the lower bound of `decimal ~> 2.0 or ~> 3.0`.
-          - elixir: "1.20"
-            otp: "29"
+          - elixir: "1.20.1"
+            otp: "29.0.2"
             decimal: "2"
     steps:
       - uses: actions/checkout@v4
@@ -35,8 +39,12 @@ jobs:
         if: matrix.decimal == '2'
         run: sed -i 's/~> 2.0 or ~> 3.0/~> 2.0/' mix.exs && mix deps.unlock decimal
       - run: mix deps.get
+      # Format and lint only on the newest version — the formatter's output and
+      # Credo can differ across Elixir releases; older versions just run the suite.
       - run: mix format --check-formatted
+        if: matrix.lint
       - run: mix credo --strict
+        if: matrix.lint
       - run: mix test
 
   coverage:

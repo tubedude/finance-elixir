@@ -323,12 +323,14 @@ defmodule Finance.CashFlow do
     future_of_inflows =
       indexed
       |> Enum.filter(fn {value, _i} -> value > 0 end)
-      |> Enum.sum_by(fn {value, i} -> value * :math.pow(1 + reinvest_rate, periods - i) end)
+      |> Enum.reduce(0.0, fn {value, i}, acc ->
+        acc + value * :math.pow(1 + reinvest_rate, periods - i)
+      end)
 
     present_of_outflows =
       indexed
       |> Enum.filter(fn {value, _i} -> value < 0 end)
-      |> Enum.sum_by(fn {value, i} -> value * discount_factor(finance_rate, i) end)
+      |> Enum.reduce(0.0, fn {value, i}, acc -> acc + value * discount_factor(finance_rate, i) end)
 
     :math.pow(future_of_inflows / -present_of_outflows, 1 / periods) - 1
   end

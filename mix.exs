@@ -8,7 +8,7 @@ defmodule Finance.MixProject do
     [
       app: :finance,
       version: @version,
-      elixir: "~> 1.18",
+      elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       description: description(),

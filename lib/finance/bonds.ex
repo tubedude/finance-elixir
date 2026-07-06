@@ -219,22 +219,22 @@ defmodule Finance.Bonds do
   # Undefined when the price side is non-positive (only a negative coupon can do it).
   defp macaulay(flows, r, freq) do
     weighted = weighted_pv(flows, r)
-    price = Enum.sum_by(weighted, fn {_k, pv} -> pv end)
+    price = Enum.reduce(weighted, 0.0, fn {_k, pv}, acc -> acc + pv end)
 
     if price <= 0.0,
       do: {:error, :undefined},
-      else: {:ok, Enum.sum_by(weighted, fn {k, pv} -> k * pv end) / price / freq}
+      else: {:ok, Enum.reduce(weighted, 0.0, fn {k, pv}, acc -> acc + k * pv end) / price / freq}
   end
 
   # Convexity in years²: the k·(k+1)-weighted PV sum, annualized by freq².
   defp convexity_value(flows, r, freq) do
     weighted = weighted_pv(flows, r)
-    price = Enum.sum_by(weighted, fn {_k, pv} -> pv end)
+    price = Enum.reduce(weighted, 0.0, fn {_k, pv}, acc -> acc + pv end)
 
     if price <= 0.0 do
       {:error, :undefined}
     else
-      num = Enum.sum_by(weighted, fn {k, pv} -> k * (k + 1) * pv end)
+      num = Enum.reduce(weighted, 0.0, fn {k, pv}, acc -> acc + k * (k + 1) * pv end)
       {:ok, num / price / :math.pow(1 + r, 2) / :math.pow(freq, 2)}
     end
   end
