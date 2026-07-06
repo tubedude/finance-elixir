@@ -20,6 +20,8 @@ defmodule Finance do
       swappable via the `:solver` option or `config :finance, solver: MySolver`
       (the default is `Finance.Solver.Newton`; `Finance.Solver.Brent` is a
       derivative-free alternative that is faster on long-horizon flows).
+    * `Finance.DayCount` — the day-count convention for dated flows, selected with
+      the `:basis` option; ships five conventions and takes a custom module.
 
   ## Deprecated flat API
 

@@ -134,6 +134,37 @@ When the data can't produce a result, `xirr/1` and `xirr/2` return
 | `:did_not_converge`    | no rate found within the iteration limit         |
 | `:mixed_currencies`    | a series mixes two or more `%Money{}` currencies |
 
+## Day-count conventions
+
+By default `xirr`/`xnpv` measure the time between dates as Actual/365 — the same
+basis as spreadsheet `XIRR`. Instruments quoted under another convention (much
+Brazilian debt is 30/360, not Actual/365) would otherwise silently disagree with
+their term sheet, so the basis is selectable with `:basis`:
+
+```elixir
+Finance.CashFlow.xirr(flows, basis: :thirty_360)
+```
+
+Five conventions ship built in: `:actual_365` (default), `:actual_360`,
+`:actual_actual` (ISDA), `:thirty_360` (US/NASD), and `:thirty_e_360` (Eurobond).
+See `Finance.DayCount`.
+
+`:basis` also takes any module implementing the `Finance.DayCount` behaviour, so a
+calendar-based convention this dependency-free library can't carry — Brazilian
+Business/252, say — lives in your app:
+
+```elixir
+defmodule MyApp.Business252 do
+  @behaviour Finance.DayCount
+  @impl true
+  def year_fraction(date1, date2) do
+    MyApp.Calendar.business_days_between(date1, date2) / 252
+  end
+end
+
+Finance.CashFlow.xirr(flows, basis: MyApp.Business252)
+```
+
 ## Solver
 
 The rate functions (`irr`, `xirr`, `rate`, `ytm`) find their rate with a

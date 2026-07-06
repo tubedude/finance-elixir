@@ -7,6 +7,15 @@ defmodule StubSolver do
   def solve_many(batch, _opts), do: Enum.map(batch, fn _ -> {:ok, 0.42} end)
 end
 
+defmodule FlatYear do
+  # A toy custom day-count convention (calendar days over a 300-day "year"), used
+  # to check that `:basis` accepts any module implementing `Finance.DayCount`.
+  @moduledoc false
+  @behaviour Finance.DayCount
+  @impl true
+  def year_fraction(date1, date2), do: Date.diff(date2, date1) / 300.0
+end
+
 defmodule FinanceTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
@@ -17,6 +26,7 @@ defmodule FinanceTest do
   doctest Finance.Returns
   doctest Finance.Rates
   doctest Finance.Bonds
+  doctest Finance.DayCount
 
   # Both shipped solvers must satisfy the same robustness contracts: the fuzz
   # properties and the pathological corpus run against each.
@@ -1518,6 +1528,108 @@ defmodule FinanceTest do
         |> Enum.sum()
 
       assert_in_delta total, -pv, 1.0e-4 * pv
+    end
+  end
+
+  describe "Finance.DayCount.year_fraction/3" do
+    # Reference year fractions cross-checked against Excel's YEARFRAC (bases
+    # 3/2/1/0/4 map to actual_365/actual_360/actual_actual/thirty_360/thirty_e_360).
+    test "a 365-day (non-leap) span" do
+      d1 = ~D[2019-01-01]
+      d2 = ~D[2020-01-01]
+      assert Finance.DayCount.year_fraction(d1, d2, :actual_365) == 1.0
+      assert_in_delta Finance.DayCount.year_fraction(d1, d2, :actual_360), 365 / 360, 1.0e-12
+      assert Finance.DayCount.year_fraction(d1, d2, :actual_actual) == 1.0
+      assert Finance.DayCount.year_fraction(d1, d2, :thirty_360) == 1.0
+      assert Finance.DayCount.year_fraction(d1, d2, :thirty_e_360) == 1.0
+    end
+
+    test "a 366-day (leap) span weights ACT/ACT by 366 but ACT/365 by 365" do
+      d1 = ~D[2020-01-01]
+      d2 = ~D[2021-01-01]
+      assert_in_delta Finance.DayCount.year_fraction(d1, d2, :actual_365), 366 / 365, 1.0e-12
+      assert Finance.DayCount.year_fraction(d1, d2, :actual_actual) == 1.0
+    end
+
+    test "ACT/ACT apportions a cross-year span across each year's length" do
+      # 2019-07-01→2020-07-01: 184 days in 2019 (/365) + 182 in leap 2020 (/366).
+      yf = Finance.DayCount.year_fraction(~D[2019-07-01], ~D[2020-07-01], :actual_actual)
+      assert_in_delta yf, 184 / 365 + 182 / 366, 1.0e-12
+    end
+
+    test "30/360 US and 30E/360 differ when the end lands on the 31st" do
+      d1 = ~D[2019-01-15]
+      d2 = ~D[2019-07-31]
+      # US keeps day 31 (start isn't on the 30th); Euro pulls it to 30.
+      assert_in_delta Finance.DayCount.year_fraction(d1, d2, :thirty_360), 196 / 360, 1.0e-12
+      assert_in_delta Finance.DayCount.year_fraction(d1, d2, :thirty_e_360), 195 / 360, 1.0e-12
+    end
+
+    test "30/360 pulls a day-31 start down to 30" do
+      # 2019-01-31→2019-02-28: 30*(1 month) + (28 - 30) = 28 thirtieths.
+      assert_in_delta Finance.DayCount.year_fraction(~D[2019-01-31], ~D[2019-02-28], :thirty_360),
+                      28 / 360,
+                      1.0e-12
+    end
+
+    test "same date is zero under every convention" do
+      for basis <- Finance.DayCount.bases() do
+        assert Finance.DayCount.year_fraction(~D[2020-03-15], ~D[2020-03-15], basis) == 0.0
+      end
+    end
+
+    property "every convention is non-negative forward, and Actual/365 is additive" do
+      check all(offsets <- list_of(integer(0..7300), length: 3)) do
+        base = ~D[2000-01-01]
+        [d1, d2, d3] = offsets |> Enum.sort() |> Enum.map(&Date.add(base, &1))
+
+        for basis <- Finance.DayCount.bases() do
+          assert Finance.DayCount.year_fraction(d1, d3, basis) >= 0.0
+        end
+
+        # Actual/365 splits additively at any intermediate date.
+        assert_in_delta Finance.DayCount.year_fraction(d1, d3, :actual_365),
+                        Finance.DayCount.year_fraction(d1, d2, :actual_365) +
+                          Finance.DayCount.year_fraction(d2, d3, :actual_365),
+                        1.0e-9
+      end
+    end
+  end
+
+  describe ":basis (day-count) on xirr/xnpv" do
+    test "the convention changes the XIRR, defaulting to Actual/365" do
+      flows = [{~D[2020-01-01], -1000}, {~D[2020-07-01], 300}, {~D[2021-06-15], 850}]
+      assert Finance.CashFlow.xirr(flows) == Finance.CashFlow.xirr(flows, basis: :actual_365)
+      assert Finance.CashFlow.xirr(flows, basis: :actual_365) == {:ok, 0.124084}
+      assert Finance.CashFlow.xirr(flows, basis: :actual_360) == {:ok, 0.122284}
+      assert Finance.CashFlow.xirr(flows, basis: :thirty_360) == {:ok, 0.12398}
+    end
+
+    test "xnpv honours the basis" do
+      flows = [{~D[2019-01-01], -1000}, {~D[2020-01-01], 1000}]
+      # Under 30/360 a calendar year is exactly 1.0, so xnpv is -1000 + 1000/1.1.
+      assert Finance.CashFlow.xnpv(0.1, flows, basis: :thirty_360, precision: 6) ==
+               {:ok, Float.round(-1000 + 1000 / 1.1, 6)}
+    end
+
+    test ":basis accepts a custom module implementing Finance.DayCount (the seam)" do
+      flows = [{~D[2020-01-01], -1000}, {~D[2020-11-26], 1100}]
+      # FlatYear uses a 300-day year; 330 days -> t = 1.1, so 1100/(1.1)^1.1.
+      assert {:ok, custom} = Finance.CashFlow.xnpv(0.1, flows, basis: FlatYear, precision: 8)
+      assert_in_delta custom, -1000 + 1100 / :math.pow(1.1, 330 / 300), 1.0e-6
+      # And it differs from the built-in Actual/365.
+      refute Finance.CashFlow.xirr(flows, basis: FlatYear) ==
+               Finance.CashFlow.xirr(flows, basis: :actual_365)
+    end
+
+    test "xirr_many threads the basis through the batch" do
+      series = [
+        [{~D[2020-01-01], -1000}, {~D[2021-06-15], 1200}],
+        [{~D[2020-01-01], -500}, {~D[2020-07-01], 560}]
+      ]
+
+      assert Finance.CashFlow.xirr_many(series, basis: :actual_360) ==
+               Enum.map(series, &Finance.CashFlow.xirr(&1, basis: :actual_360))
     end
   end
 

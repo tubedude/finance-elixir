@@ -32,6 +32,12 @@ defmodule Finance.Shared do
                       type: :atom,
                       doc:
                         "module implementing the `Finance.Solver` behaviour; defaults to `Finance.Solver.Newton`, with the derivative-free `Finance.Solver.Brent` also available"
+                    ],
+                    basis: [
+                      type: :atom,
+                      default: :actual_365,
+                      doc:
+                        "day-count convention for dated flows (`xirr`/`xnpv`): a built-in atom or a module implementing `Finance.DayCount` (see that module)"
                     ]
                   )
 

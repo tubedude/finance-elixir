@@ -1,7 +1,7 @@
 defmodule Finance.MixProject do
   use Mix.Project
 
-  @version "1.6.1"
+  @version "1.7.0"
   @source_url "https://github.com/tubedude/finance-elixir"
 
   def project do

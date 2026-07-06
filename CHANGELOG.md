@@ -1,6 +1,20 @@
 # Changelog
 
-## 1.6.1 — 2026-07-06
+## 1.7.0 — 2026-07-06
+
+### Added
+- **Day-count conventions.** `xirr`/`xnpv` (and `xnfv`) take a `:basis` option
+  selecting how the year fraction between dates is measured. Five conventions ship
+  built in — `:actual_365` (the default, so existing results are unchanged),
+  `:actual_360`, `:actual_actual` (ISDA), `:thirty_360` (US/NASD), and
+  `:thirty_e_360` (Eurobond). `:basis` also accepts any module implementing the new
+  `Finance.DayCount` behaviour, so calendar-based conventions a dependency-free
+  library can't carry (Brazilian Business/252, say) plug in from your app.
+
+### Changed
+- Day-count conventions are cross-checked against Excel `YEARFRAC` reference
+  values, and a property fuzzes the year fraction (non-negative forward, Actual/365
+  additive) across every convention.
 
 ### Fixed
 - A rate at or below -100% now returns `{:error, :undefined}` instead of raising

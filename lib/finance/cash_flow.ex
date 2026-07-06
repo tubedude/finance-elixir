@@ -41,8 +41,6 @@ defmodule Finance.CashFlow do
   @type option :: Finance.option()
   @type error :: Finance.error()
 
-  @days_in_year 365.0
-
   # === XIRR — internal rate of return for dated flows ======================
 
   @doc """
@@ -125,8 +123,10 @@ defmodule Finance.CashFlow do
   def xirr_many(series, opts \\ []) when is_list(series) and is_list(opts) do
     opts = options(opts)
 
+    basis = Keyword.fetch!(opts, :basis)
+
     series
-    |> Enum.map(&prepare_dated/1)
+    |> Enum.map(&prepare_dated(&1, basis))
     |> solve_batch(opts)
   end
 
@@ -167,7 +167,7 @@ defmodule Finance.CashFlow do
     opts = options(opts)
 
     with :ok <- check_rate(rate),
-         {:ok, flows} <- normalize(cash_flows) do
+         {:ok, flows} <- normalize(cash_flows, Keyword.fetch!(opts, :basis)) do
       {:ok, round_value(present_value(flows, rate), opts)}
     end
   end
@@ -360,7 +360,7 @@ defmodule Finance.CashFlow do
   defp compute(cash_flows, opts) do
     opts = options(opts)
 
-    with {:ok, flows} <- normalize(cash_flows),
+    with {:ok, flows} <- normalize(cash_flows, Keyword.fetch!(opts, :basis)),
          :ok <- validate(flows) do
       resolve_solver(opts).solve(flows, opts)
     end
@@ -384,8 +384,8 @@ defmodule Finance.CashFlow do
     results
   end
 
-  defp prepare_dated(cash_flows) when is_list(cash_flows) do
-    with {:ok, flows} <- normalize(cash_flows),
+  defp prepare_dated(cash_flows, basis) when is_list(cash_flows) do
+    with {:ok, flows} <- normalize(cash_flows, basis),
          :ok <- validate(flows) do
       {:ready, flows}
     end
@@ -404,9 +404,9 @@ defmodule Finance.CashFlow do
 
   # Parse dates, re-express each flow's time as years since the earliest date,
   # and merge flows that fall on the same date.
-  defp normalize([]), do: {:error, :insufficient_data}
+  defp normalize([], _basis), do: {:error, :insufficient_data}
 
-  defp normalize(cash_flows) do
+  defp normalize(cash_flows, basis) do
     amounts = Enum.map(cash_flows, fn {_date, amount} -> amount end)
 
     with :ok <- check_currency(amounts),
@@ -416,7 +416,7 @@ defmodule Finance.CashFlow do
       flows =
         parsed
         |> Enum.reduce(%{}, fn {date, amount}, acc ->
-          period = Date.diff(date, min_date) / @days_in_year
+          period = Finance.DayCount.year_fraction(min_date, date, basis)
           Map.update(acc, period, amount, &(&1 + amount))
         end)
         |> Enum.sort()
