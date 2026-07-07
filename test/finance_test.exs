@@ -1700,6 +1700,11 @@ defmodule FinanceTest do
       assert Finance.CashFlow.conventional?([-1000, 0, 0, 1100])
     end
 
+    test "false for empty or all-zero series (no sign change)" do
+      refute Finance.CashFlow.conventional?([])
+      refute Finance.CashFlow.conventional?([0, 0])
+    end
+
     test "orders {date, amount} pairs by date before counting" do
       # Same flows, shuffled: the sign pattern in time order is - + -, so non-conventional.
       pairs = [{~D[2020-06-01], 3000}, {~D[2021-01-01], -2500}, {~D[2020-01-01], -1000}]

@@ -30,6 +30,11 @@ defmodule Finance.DayCount do
     * `:thirty_e_360` leaves February alone, so `Feb 28 → Mar 1` counts three days.
       That is a known property of the convention, not a bug.
 
+  Because the 30/360 conventions round day-of-month, two *distinct* dates can map to
+  the same year fraction (e.g. the 30th and 31st of a month). `xirr`/`xnpv` merge
+  flows that share a period, so under a 30/360 basis a two-flow series on adjacent
+  such dates collapses to one period — and can then report `:insufficient_data`.
+
   ## Custom conventions
 
   `:basis` also accepts any **module** implementing this behaviour — a single
@@ -65,10 +70,14 @@ defmodule Finance.DayCount do
 
   @bases [:actual_365, :actual_360, :actual_actual, :thirty_360, :thirty_e_360]
 
-  @type basis :: :actual_365 | :actual_360 | :actual_actual | :thirty_360 | :thirty_e_360 | module
+  @typedoc "A built-in day-count convention."
+  @type builtin :: :actual_365 | :actual_360 | :actual_actual | :thirty_360 | :thirty_e_360
+
+  @typedoc "A `:basis`: a built-in convention or a module implementing `Finance.DayCount`."
+  @type basis :: builtin | module
 
   @doc "The built-in `:basis` atoms."
-  @spec bases() :: [atom]
+  @spec bases() :: [builtin]
   def bases, do: @bases
 
   @doc """

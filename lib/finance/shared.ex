@@ -37,7 +37,7 @@ defmodule Finance.Shared do
                       type: :atom,
                       default: :actual_365,
                       doc:
-                        "day-count convention for dated flows (`xirr`/`xnpv`): a built-in atom or a module implementing `Finance.DayCount` (see that module)"
+                        "day-count convention for dated flows (`xirr`/`xnpv`/`xnfv`): a built-in atom or a module implementing `Finance.DayCount` (see that module)"
                     ]
                   )
 

@@ -1,12 +1,14 @@
 defmodule Finance.CashFlow do
   @moduledoc """
-  Discounting a series of cash flows: net present value (`npv/2`, `xnpv/2`) and
-  internal rate of return (`irr/1`, `xirr/2`, `mirr/3`).
+  Discounting a series of cash flows: net present/future value (`npv/2`, `xnpv/2`,
+  `xnfv/2`) and internal rate of return (`irr/1`, `xirr/2`, `mirr/3`), plus
+  `conventional?/1` to check a series has a single unambiguous IRR.
 
-  The **dated** functions (`xirr`, `xnpv`) take `{date, amount}` flows at
-  arbitrary dates and discount on an Actual/365 basis, matching the spreadsheet
-  `XIRR`/`XNPV`. The **periodic** functions (`irr`, `npv`) take a plain list of
-  amounts at equally spaced periods `0, 1, 2, …`.
+  The **dated** functions (`xirr`, `xnpv`, `xnfv`) take `{date, amount}` flows at
+  arbitrary dates and discount on an Actual/365 basis by default — matching the
+  spreadsheet `XIRR`/`XNPV` — selectable with the `:basis` option (see
+  `Finance.DayCount`). The **periodic** functions (`irr`, `npv`) take a plain list
+  of amounts at equally spaced periods `0, 1, 2, …`.
 
   `xirr`/`irr` find the rate `r` that brings the net present value to zero,
   `Σ cf_i / (1 + r)^t_i = 0`, using `Finance.Solver` (a safeguarded
@@ -138,16 +140,16 @@ defmodule Finance.CashFlow do
 
       Σ cf_i / (1 + rate)^t_i
 
-  Each time `t_i` is measured in years from the earliest flow on an Actual/365
-  basis, the same day-count convention `xirr/2` uses. That shared convention is
-  what ties the two together: `xnpv(r, flows)` comes out to roughly zero when
-  `r` is `xirr(flows)`, so this is a handy way to check an XIRR result. And
-  because a net present value is defined for any series, the flows here don't
+  Each time `t_i` is the year fraction from the earliest flow under the `:basis`
+  day-count convention — the *same* convention `xirr/2` uses. That shared
+  convention is what ties the two together: `xnpv(r, flows)` comes out to roughly
+  zero when `r` is `xirr(flows)`, so this is a handy way to check an XIRR result.
+  And because a net present value is defined for any series, the flows here don't
   have to change sign the way `xirr/2` requires.
 
-  The result is `{:ok, value}` or `{:error, reason}`. Flows on the same date are
-  added together first, and you can pass the same `:precision` option as
-  `xirr/2` (it defaults to `6`).
+  The result is `{:ok, value}` or `{:error, reason}`. Flows sharing a period are
+  added together first, and you can pass the same `:precision` and `:basis`
+  options as `xirr/2` (basis defaults to Actual/365, precision to `6`).
 
       iex> Finance.CashFlow.xnpv(0.1, [{~D[2019-01-01], -1000}, {~D[2020-01-01], 1000}])
       {:ok, -90.909091}
@@ -160,7 +162,7 @@ defmodule Finance.CashFlow do
     xnpv(rate, cash_flows, [])
   end
 
-  @doc "Same as `xnpv/2`, and additionally takes a `:precision` option. See `xnpv/2`."
+  @doc "Same as `xnpv/2`, and additionally takes `:precision` and `:basis`. See `xnpv/2`."
   @spec xnpv(rate, [cash_flow], [option]) :: {:ok, number} | {:error, error}
   def xnpv(rate, cash_flows, opts)
       when is_number(rate) and is_list(cash_flows) and is_list(opts) do
@@ -179,7 +181,12 @@ defmodule Finance.CashFlow do
   @doc """
   Net future value of dated cash flows at `rate` — their combined worth at the
   *latest* date. The future-value mirror of `xnpv/2` (which values them at the
-  earliest date); the two differ by compounding over the series' span.
+  earliest date); the two differ by compounding over the series' span. Takes the
+  same `:precision` and `:basis` options.
+
+  Unlike `xnpv/2`, this compounds *forward*, so an extreme `rate` over a long span
+  can overflow and raise `ArithmeticError` rather than returning a value — a future
+  value that large has no float representation.
 
       iex> flows = [{~D[2021-01-01], -1000}, {~D[2022-01-01], 1100}]
       iex> Finance.CashFlow.xnfv(0.1, flows)
@@ -452,8 +459,9 @@ defmodule Finance.CashFlow do
     end
   end
 
-  # Parse dates, re-express each flow's time as years since the earliest date,
-  # and merge flows that fall on the same date.
+  # Parse dates, re-express each flow's time as the year fraction since the
+  # earliest date under `basis`, and merge flows that share a period — same date,
+  # or distinct dates a 30/360 basis maps to the same fraction.
   defp normalize([], _basis), do: {:error, :insufficient_data}
 
   defp normalize(cash_flows, basis) do
