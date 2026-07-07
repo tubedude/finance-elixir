@@ -157,13 +157,18 @@ Business/252, say — lives in your app:
 defmodule MyApp.Business252 do
   @behaviour Finance.DayCount
   @impl true
-  def year_fraction(date1, date2) do
-    MyApp.Calendar.business_days_between(date1, date2) / 252
+  def year_fraction(from, to, _opts) do
+    MyApp.Holidays.business_days_between(from, to) / 252
   end
 end
 
 Finance.CashFlow.xirr(flows, basis: MyApp.Business252)
 ```
+
+For a business-day convention, prefer materializing the market's published
+holidays (e.g. ANBIMA for Brazil) into a static business-day set rather than
+computing at runtime — [`ex_tempo`](https://hex.pm/packages/ex_tempo) can build one
+from an `.ics` calendar. See `Finance.DayCount` for the details.
 
 `xnfv/2` gives the net *future* value of dated flows (the mirror of `xnpv`), and
 `conventional?/1` reports whether a series changes sign exactly once — a `false`
