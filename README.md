@@ -13,8 +13,9 @@ have that optional dependency installed.
 
 The functions are organised into domain modules:
 
-- `Finance.CashFlow` — net present value and internal rate of return
-  (`npv`, `xnpv`, `irr`, `xirr`, `mirr`), plus batched `irr_many`/`xirr_many`.
+- `Finance.CashFlow` — net present/future value and internal rate of return
+  (`npv`, `xnpv`, `xnfv`, `irr`, `xirr`, `mirr`), `conventional?`, plus batched
+  `irr_many`/`xirr_many`.
 - `Finance.TVM` — time-value-of-money scalars (`pv`, `fv`, `pmt`, `ipmt`, `ppmt`,
   `nper`, `rate`) plus `amortization_schedule`.
 - `Finance.Rates` — rate conversions (`effective_annual_rate`, `nominal_rate`,
@@ -26,10 +27,13 @@ The functions are organised into domain modules:
   `payback_period`, `discounted_payback_period`, `profitability_index`, `twr`).
 - `Finance.Solver` — the root-finding strategy behind the rate functions,
   swappable via the `:solver` option or `config :finance, solver: MySolver`.
+- `Finance.DayCount` — the day-count convention for dated flows, selected with the
+  `:basis` option; five built-in conventions plus a behaviour for your own.
 
 The `Finance.CashFlow` rate and value functions come in two forms. The **dated**
-ones (`xirr`, `xnpv`) work with flows that land on arbitrary dates, discounting
-on an Actual/365 basis to match spreadsheet `XIRR`/`XNPV`. The **periodic** ones
+ones (`xirr`, `xnpv`, `xnfv`) work with flows that land on arbitrary dates,
+discounting on an Actual/365 basis by default to match spreadsheet `XIRR`/`XNPV`
+(see [Day-count conventions](#day-count-conventions)). The **periodic** ones
 (`irr`, `npv`, `mirr`) take a plain list of amounts spread over equally spaced
 periods, for when the exact dates don't matter.
 
@@ -42,7 +46,7 @@ Add `finance` to your dependencies in `mix.exs`:
 
 ```elixir
 def deps do
-  [{:finance, "~> 1.6"}]
+  [{:finance, "~> 1.7"}]
 end
 ```
 
@@ -90,6 +94,11 @@ One thing to watch: `npv/2` places the first amount at period 0, which is what
 makes `npv(irr(a), a) ≈ 0` hold. A spreadsheet `NPV` instead places the first
 amount at period 1, so the two won't agree unless you account for that.
 
+Two companions round out the cash-flow toolkit: `xnfv/2` gives the net *future*
+value of dated flows (the mirror of `xnpv`), and `conventional?/1` reports whether
+a series changes sign exactly once — a `false` warns that it may have several
+valid IRRs before you solve.
+
 ### Amounts: numbers, Decimal, and Money
 
 Amounts may be any number — integer minor units such as cents, or floats. If your
@@ -132,7 +141,44 @@ When the data can't produce a result, `xirr/1` and `xirr/2` return
 | `:single_signed_flow`  | all amounts have the same sign                   |
 | `:invalid_date`        | a date could not be parsed                       |
 | `:did_not_converge`    | no rate found within the iteration limit         |
+| `:undefined`           | inputs outside the function's domain, e.g. a rate at or below −100% |
 | `:mixed_currencies`    | a series mixes two or more `%Money{}` currencies |
+
+## Day-count conventions
+
+By default `xirr`/`xnpv` measure the time between dates as Actual/365 — the same
+basis as spreadsheet `XIRR`. Instruments quoted under another convention (much
+Brazilian debt is 30/360, not Actual/365) would otherwise silently disagree with
+their term sheet, so the basis is selectable with `:basis`:
+
+```elixir
+Finance.CashFlow.xirr(flows, basis: :thirty_360)
+```
+
+Five conventions ship built in: `:actual_365` (default), `:actual_360`,
+`:actual_actual` (ISDA), `:thirty_360` (US/NASD), and `:thirty_e_360` (Eurobond).
+See `Finance.DayCount`.
+
+`:basis` also takes any module implementing the `Finance.DayCount` behaviour, so a
+calendar-based convention this dependency-free library can't carry — Brazilian
+Business/252, say — lives in your app:
+
+```elixir
+defmodule MyApp.Business252 do
+  @behaviour Finance.DayCount
+  @impl true
+  def year_fraction(from, to, _opts) do
+    MyApp.Holidays.business_days_between(from, to) / 252
+  end
+end
+
+Finance.CashFlow.xirr(flows, basis: MyApp.Business252)
+```
+
+For a business-day convention, prefer materializing the market's published
+holidays (e.g. ANBIMA for Brazil) into a static business-day set rather than
+computing at runtime — [`ex_tempo`](https://hex.pm/packages/ex_tempo) can build one
+from an `.ics` calendar. See `Finance.DayCount` for the details.
 
 ## Solver
 
@@ -184,7 +230,7 @@ a rayon thread pool — add it and point `:solver` at it:
 
 ```elixir
 # mix.exs
-{:finance, "~> 1.6"},
+{:finance, "~> 1.7"},
 {:finance_rustler, "~> 0.2"}
 
 # config/config.exs

@@ -22,7 +22,7 @@ defmodule Finance.Bonds do
       present_value: 2,
       discount_factor: 2,
       round_value: 2,
-      options: 1,
+      options: 2,
       resolve_solver: 1,
       unwrap!: 1
     ]
@@ -50,7 +50,7 @@ defmodule Finance.Bonds do
     with {:ok, n} <- coupon_periods(years, freq),
          :ok <- check_yield(ytm, freq) do
       value = present_value(bond_flows(face, coupon_rate, n, freq), ytm / freq)
-      {:ok, round_value(value, options(opts))}
+      {:ok, round_value(value, options(opts, :value))}
     end
   end
 
@@ -77,7 +77,7 @@ defmodule Finance.Bonds do
       when is_number(face) and is_number(coupon_rate) and is_number(price) and is_number(years) and
              is_integer(freq) and is_list(opts) do
     with {:ok, n} <- coupon_periods(years, freq) do
-      opts = options(opts)
+      opts = options(opts, :rate)
       flows = [{0.0, -price * 1.0} | bond_flows(face, coupon_rate, n, freq)]
 
       # Solve the per-period rate at high precision, then round the annualized
@@ -186,7 +186,7 @@ defmodule Finance.Bonds do
     with {:ok, n} <- coupon_periods(years, freq),
          :ok <- check_yield(ytm, freq),
          {:ok, value} <- fun.(bond_flows(1, coupon_rate, n, freq)) do
-      {:ok, round_value(value, options(opts))}
+      {:ok, round_value(value, options(opts, :value))}
     end
   end
 

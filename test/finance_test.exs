@@ -7,6 +7,15 @@ defmodule StubSolver do
   def solve_many(batch, _opts), do: Enum.map(batch, fn _ -> {:ok, 0.42} end)
 end
 
+defmodule FlatYear do
+  # A toy custom day-count convention (calendar days over a 300-day "year"), used
+  # to check that `:basis` accepts any module implementing `Finance.DayCount`.
+  @moduledoc false
+  @behaviour Finance.DayCount
+  @impl true
+  def year_fraction(date1, date2, _opts), do: Date.diff(date2, date1) / 300.0
+end
+
 defmodule FinanceTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
@@ -17,6 +26,7 @@ defmodule FinanceTest do
   doctest Finance.Returns
   doctest Finance.Rates
   doctest Finance.Bonds
+  doctest Finance.DayCount
 
   # Both shipped solvers must satisfy the same robustness contracts: the fuzz
   # properties and the pathological corpus run against each.
@@ -155,6 +165,58 @@ defmodule FinanceTest do
     test "an integer guess or tolerance is accepted" do
       assert Finance.CashFlow.irr([-1000, 1100], guess: 1) == {:ok, 0.1}
       assert {:ok, _rate} = Finance.CashFlow.irr([-1000, 1100], tolerance: 1)
+    end
+
+    test "an option a function doesn't use raises instead of being silently ignored" do
+      # :basis is meaningless on periodic flows — accepting it would let a user
+      # believe the convention took effect.
+      assert_raise NimbleOptions.ValidationError, fn ->
+        Finance.CashFlow.irr([-1000, 1100], basis: :thirty_360)
+      end
+
+      # Solver options are meaningless on closed-form values.
+      assert_raise NimbleOptions.ValidationError, fn ->
+        Finance.CashFlow.xnpv(0.1, [{~D[2019-01-01], -1000}], guess: 5.0)
+      end
+
+      assert_raise NimbleOptions.ValidationError, fn ->
+        Finance.CashFlow.npv(0.1, [-1000, 1100], solver: Finance.Solver.Brent)
+      end
+
+      assert_raise NimbleOptions.ValidationError, fn ->
+        Finance.Bonds.duration(0.05, 0.05, 10, 2, guess: 9.9)
+      end
+
+      # ytm solves but isn't dated, so :basis doesn't apply.
+      assert_raise NimbleOptions.ValidationError, fn ->
+        Finance.Bonds.ytm(100, 0.05, 100.0, 10, 2, basis: :actual_360)
+      end
+    end
+
+    test "options are validated even when the data would also be rejected" do
+      assert_raise NimbleOptions.ValidationError, fn ->
+        Finance.CashFlow.npv(0.1, [], bogus: 1)
+      end
+
+      assert Finance.CashFlow.npv(0.1, []) == {:error, :insufficient_data}
+    end
+
+    test "precision is capped at 15 in every schema" do
+      assert_raise NimbleOptions.ValidationError, fn ->
+        Finance.Returns.cagr(1000, 2000, 10, precision: 16)
+      end
+
+      assert_raise NimbleOptions.ValidationError, fn ->
+        Finance.Returns.volatility([100, 102, 101], precision: 16)
+      end
+
+      assert_raise NimbleOptions.ValidationError, fn ->
+        Finance.Returns.twr([0.1, 0.2], precision: 16)
+      end
+
+      assert_raise NimbleOptions.ValidationError, fn ->
+        Finance.TVM.amortization_schedule(0.05, 12, 1000, precision: 16)
+      end
     end
   end
 
@@ -496,6 +558,44 @@ defmodule FinanceTest do
     end
   end
 
+  describe "Apache POI (Java) issue corpus" do
+    test "a 46-flow near-zero-rate loan converges (POI bug 64137)" do
+      # Two large outflows then 44 small monthly inflows: the rate is only ~-0.95% a
+      # month, and POI's fixed-iteration Newton reported non-convergence. Excel gives
+      # -0.009463562705856.
+      series =
+        [-30_000.0, -49_970.7425] ++
+          [
+            29.2575,
+            146.2875,
+            380.34749999999997,
+            581.5,
+            581.5,
+            731.4374999999999,
+            731.4374999999999,
+            731.4374999999999,
+            877.725,
+            877.725,
+            877.725,
+            1024.0125,
+            1024.0125,
+            1024.0125,
+            1170.3,
+            1170.3,
+            1170.3,
+            1170.3,
+            1316.5874999999999,
+            1316.5874999999999,
+            1316.5874999999999,
+            1316.5874999999999
+          ] ++ List.duplicate(1462.8749999999998, 21) ++ [10_000.0]
+
+      assert {:ok, rate} = Finance.CashFlow.irr(series, precision: 12)
+      assert_periodic_root(rate, series)
+      assert_in_delta rate, -0.009463562706, 1.0e-6
+    end
+  end
+
   describe "java-xirr (Java) issue corpus" do
     test "an overflowing 31-flow series matches Google Sheets (#17)" do
       # java-xirr overflowed; Sheets/LibreOffice give -0.809918434570599.
@@ -671,6 +771,42 @@ defmodule FinanceTest do
                Finance.CashFlow.xirr(flows, precision: 10, solver: Finance.Solver.Brent)
 
       assert_dated_root(brent, flows)
+    end
+
+    test "an even steeper negative yield than #5 is still found (#5b)" do
+      # #5 with one extra outflow before the payout drives the root below -83%.
+      flows = [
+        {{2001, 6, 22}, -2610},
+        {{2001, 7, 3}, -2589},
+        {{2001, 7, 5}, -5110},
+        {{2001, 7, 6}, -2550},
+        {{2001, 7, 9}, -5086},
+        {{2001, 7, 10}, -2561},
+        {{2001, 7, 12}, -5040},
+        {{2001, 7, 13}, -2552},
+        {{2001, 7, 16}, -2530},
+        {{2001, 7, 17}, -9840},
+        {{2001, 7, 18}, 38_900}
+      ]
+
+      assert {:ok, rate} = Finance.CashFlow.xirr(flows, precision: 10)
+      assert_dated_root(rate, flows)
+      assert rate < -0.83
+    end
+
+    test "a series with no real IRR reports cleanly, not a spin (#20)" do
+      # One small inflow among five large outflows: NPV never crosses zero, so no
+      # rate exists. java-xirr spun to its iteration cap; the bracketer returns cleanly.
+      flows = [
+        {{2015, 7, 15}, -275_112_000},
+        {{2017, 5, 2}, -57_258_697.67},
+        {{2017, 11, 10}, 2_577_101.75},
+        {{2018, 10, 10}, -2_184_516_955.15},
+        {{2019, 1, 29}, -660_239_840},
+        {{2021, 5, 13}, -26_567_773_295.82}
+      ]
+
+      assert Finance.CashFlow.xirr(flows) == {:error, :did_not_converge}
     end
   end
 
@@ -1049,6 +1185,16 @@ defmodule FinanceTest do
       assert Finance.TVM.rate(10, 100, 1000) == {:error, :did_not_converge}
     end
 
+    test "rate solves the reference cases Excel/POI pin" do
+      # A very small per-period rate over a long horizon (POI bug 65988): a 30-year
+      # monthly loan where a fixed-iteration Newton failed to converge.
+      assert Finance.TVM.rate(360, 6.56, -2000, 0, 0, precision: 12) == {:ok, 0.000948017084}
+      # Microsoft's RATE example: 48-month, -200/mo, 8000 borrowed → 0.7701% a month.
+      assert Finance.TVM.rate(48, -200, 8000) == {:ok, 0.007701}
+      # A deep-negative per-period rate (LibreOffice reference), guess-selected.
+      assert Finance.TVM.rate(3, -10, 900, 1, 0, guess: 0.5) == {:ok, -0.76336}
+    end
+
     test "nper is undefined when 1 + rate <= 0" do
       assert Finance.TVM.nper(-1.5, -100, 1000) == {:error, :undefined}
     end
@@ -1201,6 +1347,22 @@ defmodule FinanceTest do
         Finance.Returns.cagr(1000, 2000, 10, precison: 2)
       end
     end
+
+    test "the cash-flow metrics accept Decimal and Money amounts like CashFlow" do
+      decimals = Enum.map([-1000, 500, 500, 500], &Decimal.new/1)
+      monies = Enum.map([-1000, 500, 500, 500], &money(:USD, &1))
+
+      assert Finance.Returns.payback_period(decimals) == {:ok, 2.0}
+      assert Finance.Returns.payback_period(monies) == {:ok, 2.0}
+
+      assert Finance.Returns.discounted_payback_period(decimals, 0.0) == {:ok, 2.0}
+
+      assert Finance.Returns.profitability_index(Enum.map([-1000, 1100], &Decimal.new/1), 0.1) ==
+               {:ok, 1.0}
+
+      assert Finance.Returns.volatility(Enum.map([100, 102, 101, 103, 105], &Decimal.new/1)) ==
+               Finance.Returns.volatility([100, 102, 101, 103, 105])
+    end
   end
 
   describe "volatility" do
@@ -1300,6 +1462,11 @@ defmodule FinanceTest do
       assert Finance.Bonds.ytm(100, 0.05, 100.0, 10) == {:ok, 0.05}
     end
 
+    test "fractional years are fine when they make whole coupon periods" do
+      # 2.5 years at semiannual freq is exactly 5 periods — supported, not an accident.
+      assert Finance.Bonds.price(1000, 0.06, 0.06, 2.5, 2) == {:ok, 1000.0}
+    end
+
     test "the annual yield is rounded once, not twice through the period rate" do
       # A discount bond whose period yield sits on a rounding boundary. Rounding
       # the period rate to :precision and *then* annualizing (the pre-1.6.1 path)
@@ -1338,6 +1505,13 @@ defmodule FinanceTest do
 
     test "ytm does not converge when no yield brackets the price" do
       assert Finance.Bonds.ytm(100, 0.05, -50.0, 10) == {:error, :did_not_converge}
+    end
+
+    test "a discounted zero-coupon bond yields the exact closed-form rate (QuantLib #256)" do
+      # A 1-year zero at 90 (face 100), semiannual: (1 + y/2)^2 = 100/90, so
+      # y = 2*(sqrt(10/9) - 1) = 0.1081851... QuantLib underestimated this
+      # (10.54-10.79% depending on day count); the closed form is exact here.
+      assert Finance.Bonds.ytm(100, 0.0, 90.0, 1, 2) == {:ok, 0.108185}
     end
 
     test "ytm converges for long-maturity, low-yield bonds (solver overflow fallback)" do
@@ -1521,6 +1695,278 @@ defmodule FinanceTest do
     end
   end
 
+  describe "Finance.DayCount.year_fraction/3" do
+    # actual_365/actual_360/thirty_360/thirty_e_360 match Excel YEARFRAC bases
+    # 3/2/0/4. actual_actual is Actual/Actual (ISDA) — NOT Excel basis 1, which
+    # uses a different average-year-length method; its reference is the ISDA
+    # definition (each calendar year's days over that year's own length).
+    test "a 365-day (non-leap) span" do
+      d1 = ~D[2019-01-01]
+      d2 = ~D[2020-01-01]
+      assert Finance.DayCount.year_fraction(d1, d2, :actual_365) == 1.0
+      assert_in_delta Finance.DayCount.year_fraction(d1, d2, :actual_360), 365 / 360, 1.0e-12
+      assert Finance.DayCount.year_fraction(d1, d2, :actual_actual) == 1.0
+      assert Finance.DayCount.year_fraction(d1, d2, :thirty_360) == 1.0
+      assert Finance.DayCount.year_fraction(d1, d2, :thirty_e_360) == 1.0
+    end
+
+    test "a 366-day (leap) span weights ACT/ACT by 366 but ACT/365 by 365" do
+      d1 = ~D[2020-01-01]
+      d2 = ~D[2021-01-01]
+      assert_in_delta Finance.DayCount.year_fraction(d1, d2, :actual_365), 366 / 365, 1.0e-12
+      assert Finance.DayCount.year_fraction(d1, d2, :actual_actual) == 1.0
+    end
+
+    test "ACT/ACT apportions a cross-year span across each year's length" do
+      # 2019-07-01→2020-07-01: 184 days in 2019 (/365) + 182 in leap 2020 (/366).
+      yf = Finance.DayCount.year_fraction(~D[2019-07-01], ~D[2020-07-01], :actual_actual)
+      assert_in_delta yf, 184 / 365 + 182 / 366, 1.0e-12
+    end
+
+    test "ACT/ACT sums per calendar year across a multi-year span over a leap year" do
+      # The classic bug is one denominator for the whole span; the value must equal
+      # the ISDA per-year sum, computed here from the definition (not the impl).
+      d1 = ~D[2019-07-01]
+      d2 = ~D[2022-03-01]
+
+      expected =
+        Date.diff(~D[2020-01-01], d1) / 365 +
+          366 / 366 +
+          365 / 365 +
+          Date.diff(d2, ~D[2022-01-01]) / 365
+
+      assert_in_delta Finance.DayCount.year_fraction(d1, d2, :actual_actual), expected, 1.0e-12
+    end
+
+    test "30/360 US and 30E/360 differ when the end lands on the 31st" do
+      d1 = ~D[2019-01-15]
+      d2 = ~D[2019-07-31]
+      # US keeps day 31 (start isn't on the 30th); Euro pulls it to 30.
+      assert_in_delta Finance.DayCount.year_fraction(d1, d2, :thirty_360), 196 / 360, 1.0e-12
+      assert_in_delta Finance.DayCount.year_fraction(d1, d2, :thirty_e_360), 195 / 360, 1.0e-12
+    end
+
+    test "30/360 pulls a day-31 start down to 30" do
+      # 2019-01-31→2019-02-28: 30*(1 month) + (28 - 30) = 28 thirtieths.
+      assert_in_delta Finance.DayCount.year_fraction(~D[2019-01-31], ~D[2019-02-28], :thirty_360),
+                      28 / 360,
+                      1.0e-12
+    end
+
+    test "30/360 US leaves Feb 29 alone (plain NASD, no end-of-month rule)" do
+      # The SIA EOM variant would pull a last-of-February start to 30; the shipped
+      # convention deliberately does not — this pins that choice.
+      assert_in_delta Finance.DayCount.year_fraction(~D[2020-02-29], ~D[2020-03-31], :thirty_360),
+                      32 / 360,
+                      1.0e-12
+    end
+
+    test "Actual/Actual matches the ISDA 2006 gold values (QuantLib daycounters.cpp)" do
+      # Canonical Act/Act (ISDA) anchors from the ISDA 2006 paper, as pinned in
+      # QuantLib's test suite. The first straddles a leap year (184/365 + 182/366).
+      assert_in_delta Finance.DayCount.year_fraction(
+                        ~D[1999-07-01],
+                        ~D[2000-07-01],
+                        :actual_actual
+                      ),
+                      1.0013773486,
+                      1.0e-9
+
+      assert_in_delta Finance.DayCount.year_fraction(
+                        ~D[2003-11-01],
+                        ~D[2004-05-01],
+                        :actual_actual
+                      ),
+                      0.497724380567,
+                      1.0e-9
+
+      assert_in_delta Finance.DayCount.year_fraction(
+                        ~D[1999-02-01],
+                        ~D[1999-07-01],
+                        :actual_actual
+                      ),
+                      0.410958904110,
+                      1.0e-9
+    end
+
+    test "30/360 follows Excel DAYS360, not the NASD end-of-February rule" do
+      # A last-day-of-February start: QuantLib's NASD "USA" 30/360 pulls it to 30
+      # (3 days), but Excel's DAYS360 US — the convention we ship — does not (5 days).
+      assert_in_delta Finance.DayCount.year_fraction(~D[2006-02-28], ~D[2006-03-03], :thirty_360),
+                      5 / 360,
+                      1.0e-12
+    end
+
+    test "same date is zero under every convention" do
+      for basis <- Finance.DayCount.bases() do
+        assert Finance.DayCount.year_fraction(~D[2020-03-15], ~D[2020-03-15], basis) == 0.0
+      end
+    end
+
+    property "every convention is non-negative forward, and Actual/365 is additive" do
+      check all(offsets <- list_of(integer(0..7300), length: 3)) do
+        base = ~D[2000-01-01]
+        [d1, d2, d3] = offsets |> Enum.sort() |> Enum.map(&Date.add(base, &1))
+
+        for basis <- Finance.DayCount.bases() do
+          assert Finance.DayCount.year_fraction(d1, d3, basis) >= 0.0
+        end
+
+        # Actual/365 splits additively at any intermediate date.
+        assert_in_delta Finance.DayCount.year_fraction(d1, d3, :actual_365),
+                        Finance.DayCount.year_fraction(d1, d2, :actual_365) +
+                          Finance.DayCount.year_fraction(d2, d3, :actual_365),
+                        1.0e-9
+      end
+    end
+  end
+
+  describe ":basis (day-count) on xirr/xnpv" do
+    test "the convention changes the XIRR, defaulting to Actual/365" do
+      flows = [{~D[2020-01-01], -1000}, {~D[2020-07-01], 300}, {~D[2021-06-15], 850}]
+      assert Finance.CashFlow.xirr(flows) == Finance.CashFlow.xirr(flows, basis: :actual_365)
+      assert Finance.CashFlow.xirr(flows, basis: :actual_365) == {:ok, 0.124084}
+      assert Finance.CashFlow.xirr(flows, basis: :actual_360) == {:ok, 0.122284}
+      assert Finance.CashFlow.xirr(flows, basis: :thirty_360) == {:ok, 0.12398}
+    end
+
+    test "xnpv honours the basis" do
+      flows = [{~D[2019-01-01], -1000}, {~D[2020-01-01], 1000}]
+      # Under 30/360 a calendar year is exactly 1.0, so xnpv is -1000 + 1000/1.1.
+      assert Finance.CashFlow.xnpv(0.1, flows, basis: :thirty_360, precision: 6) ==
+               {:ok, Float.round(-1000 + 1000 / 1.1, 6)}
+    end
+
+    test ":basis accepts a custom module implementing Finance.DayCount (the seam)" do
+      flows = [{~D[2020-01-01], -1000}, {~D[2020-11-26], 1100}]
+      # FlatYear uses a 300-day year; 330 days -> t = 1.1, so 1100/(1.1)^1.1.
+      assert {:ok, custom} = Finance.CashFlow.xnpv(0.1, flows, basis: FlatYear, precision: 8)
+      assert_in_delta custom, -1000 + 1100 / :math.pow(1.1, 330 / 300), 1.0e-6
+      # And it differs from the built-in Actual/365.
+      refute Finance.CashFlow.xirr(flows, basis: FlatYear) ==
+               Finance.CashFlow.xirr(flows, basis: :actual_365)
+    end
+
+    test "xirr_many threads the basis through the batch" do
+      series = [
+        [{~D[2020-01-01], -1000}, {~D[2021-06-15], 1200}],
+        [{~D[2020-01-01], -500}, {~D[2020-07-01], 560}]
+      ]
+
+      assert Finance.CashFlow.xirr_many(series, basis: :actual_360) ==
+               Enum.map(series, &Finance.CashFlow.xirr(&1, basis: :actual_360))
+
+      # basis and a custom solver survive batch dispatch together
+      assert Finance.CashFlow.xirr_many(series,
+               basis: :actual_360,
+               solver: Finance.Solver.Brent
+             ) ==
+               Enum.map(
+                 series,
+                 &Finance.CashFlow.xirr(&1, basis: :actual_360, solver: Finance.Solver.Brent)
+               )
+    end
+
+    test "cross-function contracts hold under a non-default basis" do
+      # Consecutive Jan-1sts are exactly 1.0 under 30/360 too, so irr == xirr.
+      dates = [~D[2021-01-01], ~D[2022-01-01], ~D[2023-01-01], ~D[2024-01-01]]
+      amounts = [-1000, 500, 500, 300]
+
+      assert Finance.CashFlow.xirr(dates, amounts, basis: :thirty_360) ==
+               Finance.CashFlow.irr(amounts)
+
+      # xnfv = xnpv · (1 + r)^span under any basis (span is 2.0 under 30/360 here).
+      flows = [{~D[2021-01-15], -1000}, {~D[2022-01-15], 500}, {~D[2023-01-15], 700}]
+      assert {:ok, npv} = Finance.CashFlow.xnpv(0.1, flows, basis: :thirty_360, precision: 10)
+      assert {:ok, fv} = Finance.CashFlow.xnfv(0.1, flows, basis: :thirty_360, precision: 10)
+      assert_in_delta fv, npv * :math.pow(1.1, 2), 1.0e-6
+    end
+  end
+
+  describe "xnfv/2" do
+    test "is xnpv compounded forward over the series' span" do
+      flows = [{~D[2021-01-01], -1000}, {~D[2022-01-01], 500}, {~D[2023-01-01], 700}]
+      # 2021→2023 is exactly 2 non-leap years, so xnfv = xnpv * 1.1^2.
+      assert Finance.CashFlow.xnfv(0.1, flows) == {:ok, 40.0}
+      assert {:ok, npv} = Finance.CashFlow.xnpv(0.1, flows, precision: 10)
+      assert {:ok, fv} = Finance.CashFlow.xnfv(0.1, flows, precision: 10)
+      assert_in_delta fv, npv * :math.pow(1.1, 2), 1.0e-6
+    end
+
+    test "is zero exactly when xnpv is (at the break-even rate)" do
+      flows = [{~D[2021-01-01], -1000}, {~D[2022-01-01], 1100}]
+      assert Finance.CashFlow.xnfv(0.1, flows) == {:ok, 0.0}
+    end
+
+    test "propagates errors and guards the rate domain" do
+      assert Finance.CashFlow.xnfv(0.1, []) == {:error, :insufficient_data}
+
+      assert Finance.CashFlow.xnfv(-1.0, [{~D[2021-01-01], -1000}, {~D[2022-01-01], 1100}]) ==
+               {:error, :undefined}
+    end
+
+    test "a future value too large for a float is undefined, not a crash" do
+      # Forward compounding overflows where discounting would only underflow.
+      flows = [{~D[2000-01-01], -1}, {~D[2100-01-01], 1}]
+      assert Finance.CashFlow.xnfv(1.0e6, flows) == {:error, :undefined}
+    end
+
+    test "xnfv!/2 returns the bare value and raises on error" do
+      flows = [{~D[2021-01-01], -1000}, {~D[2022-01-01], 1100}]
+      assert Finance.CashFlow.xnfv!(0.1, flows) == 0.0
+      assert_raise ArgumentError, fn -> Finance.CashFlow.xnfv!(0.1, []) end
+    end
+  end
+
+  describe "conventional?/1" do
+    test "true for exactly one sign change" do
+      assert Finance.CashFlow.conventional?([-1000, 300, 400, 500])
+      assert Finance.CashFlow.conventional?([-1000, 1100])
+      assert Finance.CashFlow.conventional?([500, 500, -2000])
+    end
+
+    test "false for more than one sign change (multi-IRR risk)" do
+      refute Finance.CashFlow.conventional?([-1000, 3000, -2500])
+      refute Finance.CashFlow.conventional?([-1600, 10_000, -10_000])
+    end
+
+    test "false for a single-signed series (no IRR)" do
+      refute Finance.CashFlow.conventional?([100, 200, 300])
+      refute Finance.CashFlow.conventional?([-100, -200])
+    end
+
+    test "ignores zero flows" do
+      assert Finance.CashFlow.conventional?([-1000, 0, 0, 1100])
+    end
+
+    test "false for empty or all-zero series (no sign change)" do
+      refute Finance.CashFlow.conventional?([])
+      refute Finance.CashFlow.conventional?([0, 0])
+    end
+
+    test "orders {date, amount} pairs by date before counting" do
+      # Same flows, shuffled: the sign pattern in time order is - + -, so non-conventional.
+      pairs = [{~D[2020-06-01], 3000}, {~D[2021-01-01], -2500}, {~D[2020-01-01], -1000}]
+      refute Finance.CashFlow.conventional?(pairs)
+
+      assert Finance.CashFlow.conventional?([
+               {~D[2020-01-01], -1000},
+               {~D[2020-06-01], 400},
+               {~D[2021-01-01], 900}
+             ])
+    end
+
+    test "accepts {y, m, d} tuple dates too" do
+      assert Finance.CashFlow.conventional?([{{2020, 1, 1}, -1000}, {{2021, 1, 1}, 1100}])
+
+      refute Finance.CashFlow.conventional?([
+               {{2020, 1, 1}, -1000},
+               {{2021, 1, 1}, 1100},
+               {{2022, 1, 1}, -50}
+             ])
+    end
+  end
+
   describe "properties" do
     # Build a two-flow investment with a known rate and confirm we recover it:
     # investing -P today and receiving P·(1+r)^years after `years` implies XIRR = r.
@@ -1541,6 +1987,19 @@ defmodule FinanceTest do
 
           assert_in_delta found, rate, 1.0e-3
         end
+      end
+    end
+
+    property "Decimal and Money amounts produce exactly the same rate as plain numbers" do
+      # The coercion seam (to_amount/check_currency) must be value-transparent:
+      # wrapping every amount changes nothing about the solve.
+      check all(amounts <- list_of(integer(-1_000_000..1_000_000), min_length: 2, max_length: 10)) do
+        plain = Finance.CashFlow.irr(amounts)
+        decimals = Finance.CashFlow.irr(Enum.map(amounts, &Decimal.new/1))
+        monies = Finance.CashFlow.irr(Enum.map(amounts, &money(:USD, &1)))
+
+        assert decimals == plain
+        assert monies == plain
       end
     end
 

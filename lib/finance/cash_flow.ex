@@ -1,12 +1,14 @@
 defmodule Finance.CashFlow do
   @moduledoc """
-  Discounting a series of cash flows: net present value (`npv/2`, `xnpv/2`) and
-  internal rate of return (`irr/1`, `xirr/2`, `mirr/3`).
+  Discounting a series of cash flows: net present/future value (`npv/2`, `xnpv/2`,
+  `xnfv/2`) and internal rate of return (`irr/1`, `xirr/2`, `mirr/3`), plus
+  `conventional?/1` to check a series has a single unambiguous IRR.
 
-  The **dated** functions (`xirr`, `xnpv`) take `{date, amount}` flows at
-  arbitrary dates and discount on an Actual/365 basis, matching the spreadsheet
-  `XIRR`/`XNPV`. The **periodic** functions (`irr`, `npv`) take a plain list of
-  amounts at equally spaced periods `0, 1, 2, …`.
+  The **dated** functions (`xirr`, `xnpv`, `xnfv`) take `{date, amount}` flows at
+  arbitrary dates and discount on an Actual/365 basis by default — matching the
+  spreadsheet `XIRR`/`XNPV` — selectable with the `:basis` option (see
+  `Finance.DayCount`). The **periodic** functions (`irr`, `npv`) take a plain list
+  of amounts at equally spaced periods `0, 1, 2, …`.
 
   `xirr`/`irr` find the rate `r` that brings the net present value to zero,
   `Σ cf_i / (1 + r)^t_i = 0`, using `Finance.Solver` (a safeguarded
@@ -27,7 +29,8 @@ defmodule Finance.CashFlow do
       to_amount: 1,
       round_value: 2,
       unwrap!: 1,
-      options: 1,
+      safely: 1,
+      options: 2,
       resolve_solver: 1,
       present_value: 2,
       discount_factor: 2,
@@ -41,8 +44,6 @@ defmodule Finance.CashFlow do
   @type option :: Finance.option()
   @type error :: Finance.error()
 
-  @days_in_year 365.0
-
   # === XIRR — internal rate of return for dated flows ======================
 
   @doc """
@@ -50,11 +51,11 @@ defmodule Finance.CashFlow do
   return that the flows imply, given when each one lands.
 
   Reach for this when your cash flows happen on irregular dates rather than at
-  neat intervals. See `xirr/2` if you want to pass options or use the two-list
-  form.
+  neat intervals. The rate is a fraction per year, so `{:ok, 0.2}` means 20%.
+  See `xirr/2` if you want to pass options or use the two-list form.
 
-      iex> Finance.CashFlow.xirr([{~D[2015-06-01], 1_000_000}, {~D[2015-10-01], -2_200_000}, {~D[2015-11-01], -800_000}])
-      {:ok, 21.118359}
+      iex> Finance.CashFlow.xirr([{~D[2019-01-01], -1000}, {~D[2020-01-01], 1200}])
+      {:ok, 0.2}
   """
   @spec xirr([cash_flow]) :: {:ok, rate} | {:error, error}
   def xirr(cash_flows) when is_list(cash_flows), do: xirr(cash_flows, [])
@@ -123,10 +124,12 @@ defmodule Finance.CashFlow do
   """
   @spec xirr_many([[cash_flow]], [option]) :: [{:ok, rate} | {:error, error}]
   def xirr_many(series, opts \\ []) when is_list(series) and is_list(opts) do
-    opts = options(opts)
+    opts = options(opts, :dated_rate)
+
+    basis = Keyword.fetch!(opts, :basis)
 
     series
-    |> Enum.map(&prepare_dated/1)
+    |> Enum.map(&prepare_dated(&1, basis))
     |> solve_batch(opts)
   end
 
@@ -138,16 +141,16 @@ defmodule Finance.CashFlow do
 
       Σ cf_i / (1 + rate)^t_i
 
-  Each time `t_i` is measured in years from the earliest flow on an Actual/365
-  basis, the same day-count convention `xirr/2` uses. That shared convention is
-  what ties the two together: `xnpv(r, flows)` comes out to roughly zero when
-  `r` is `xirr(flows)`, so this is a handy way to check an XIRR result. And
-  because a net present value is defined for any series, the flows here don't
+  Each time `t_i` is the year fraction from the earliest flow under the `:basis`
+  day-count convention — the *same* convention `xirr/2` uses. That shared
+  convention is what ties the two together: `xnpv(r, flows)` comes out to roughly
+  zero when `r` is `xirr(flows)`, so this is a handy way to check an XIRR result.
+  And because a net present value is defined for any series, the flows here don't
   have to change sign the way `xirr/2` requires.
 
-  The result is `{:ok, value}` or `{:error, reason}`. Flows on the same date are
-  added together first, and you can pass the same `:precision` option as
-  `xirr/2` (it defaults to `6`).
+  The result is `{:ok, value}` or `{:error, reason}`. Flows sharing a period are
+  added together first, and you can pass the same `:precision` and `:basis`
+  options as `xirr/2` (basis defaults to Actual/365, precision to `6`).
 
       iex> Finance.CashFlow.xnpv(0.1, [{~D[2019-01-01], -1000}, {~D[2020-01-01], 1000}])
       {:ok, -90.909091}
@@ -160,14 +163,14 @@ defmodule Finance.CashFlow do
     xnpv(rate, cash_flows, [])
   end
 
-  @doc "Same as `xnpv/2`, and additionally takes a `:precision` option. See `xnpv/2`."
+  @doc "Same as `xnpv/2`, and additionally takes `:precision` and `:basis`. See `xnpv/2`."
   @spec xnpv(rate, [cash_flow], [option]) :: {:ok, number} | {:error, error}
   def xnpv(rate, cash_flows, opts)
       when is_number(rate) and is_list(cash_flows) and is_list(opts) do
-    opts = options(opts)
+    opts = options(opts, :dated_value)
 
     with :ok <- check_rate(rate),
-         {:ok, flows} <- normalize(cash_flows) do
+         {:ok, flows} <- normalize(cash_flows, Keyword.fetch!(opts, :basis)) do
       {:ok, round_value(present_value(flows, rate), opts)}
     end
   end
@@ -175,6 +178,72 @@ defmodule Finance.CashFlow do
   @doc "Same as `xnpv/2`, but returns the value directly and raises `ArgumentError` on error."
   @spec xnpv!(rate, [cash_flow]) :: number
   def xnpv!(rate, cash_flows), do: rate |> xnpv(cash_flows) |> unwrap!()
+
+  @doc """
+  Net future value of dated cash flows at `rate` — their combined worth at the
+  *latest* date. The future-value mirror of `xnpv/2` (which values them at the
+  earliest date); the two differ by compounding over the series' span. Takes the
+  same `:precision` and `:basis` options.
+
+  Unlike `xnpv/2`, this compounds *forward*, so an extreme `rate` over a long span
+  can produce a future value too large for a float; that comes back as
+  `{:error, :undefined}`.
+
+      iex> flows = [{~D[2021-01-01], -1000}, {~D[2022-01-01], 1100}]
+      iex> Finance.CashFlow.xnfv(0.1, flows)
+      {:ok, 0.0}
+  """
+  @spec xnfv(rate, [cash_flow]) :: {:ok, number} | {:error, error}
+  def xnfv(rate, cash_flows) when is_number(rate) and is_list(cash_flows) do
+    xnfv(rate, cash_flows, [])
+  end
+
+  @doc "Same as `xnfv/2`, and additionally takes `:precision` and `:basis`. See `xnfv/2`."
+  @spec xnfv(rate, [cash_flow], [option]) :: {:ok, number} | {:error, error}
+  def xnfv(rate, cash_flows, opts)
+      when is_number(rate) and is_list(cash_flows) and is_list(opts) do
+    opts = options(opts, :dated_value)
+
+    with :ok <- check_rate(rate),
+         {:ok, flows} <- normalize(cash_flows, Keyword.fetch!(opts, :basis)) do
+      future_value(flows, rate, opts)
+    end
+  end
+
+  # Compound the present value forward to the series' horizon. Forward compounding
+  # can overflow where discounting only underflows; an unrepresentable future value
+  # is undefined, not a crash.
+  defp future_value(flows, rate, opts) do
+    horizon = flows |> Enum.map(fn {t, _amount} -> t end) |> Enum.max()
+
+    case safely(fn -> present_value(flows, rate) * :math.pow(1 + rate, horizon) end) do
+      :diverged -> {:error, :undefined}
+      value -> {:ok, round_value(value, opts)}
+    end
+  end
+
+  @doc "Same as `xnfv/2`, but returns the value directly and raises `ArgumentError` on error."
+  @spec xnfv!(rate, [cash_flow]) :: number
+  def xnfv!(rate, cash_flows), do: rate |> xnfv(cash_flows) |> unwrap!()
+
+  @doc """
+  Whether a series is *conventional* — its amounts change sign exactly once, so it
+  has a single, unambiguous internal rate of return. More than one sign change
+  makes it non-conventional: it may admit several valid IRRs, and `xirr`/`irr`
+  return the one nearest `:guess`. Use this to detect that case before solving.
+
+  Accepts periodic amounts or `{date, amount}` pairs (ordered by date first).
+
+      iex> Finance.CashFlow.conventional?([-1000, 300, 400, 500])
+      true
+
+      iex> Finance.CashFlow.conventional?([-1000, 3000, -2500])
+      false
+  """
+  @spec conventional?([amount] | [cash_flow]) :: boolean
+  def conventional?(cash_flows) when is_list(cash_flows) do
+    cash_flows |> amounts_in_order() |> sign_changes() == 1
+  end
 
   # === IRR — internal rate of return for periodic flows ====================
 
@@ -199,7 +268,7 @@ defmodule Finance.CashFlow do
   @doc "Same as `irr/1`, and additionally takes the same options as `xirr/2`."
   @spec irr([amount], [option]) :: {:ok, rate} | {:error, error}
   def irr(amounts, opts) when is_list(amounts) and is_list(opts) do
-    opts = options(opts)
+    opts = options(opts, :rate)
     flows = periodic_flows(amounts)
 
     with :ok <- check_currency(amounts), :ok <- validate(flows) do
@@ -224,7 +293,7 @@ defmodule Finance.CashFlow do
   """
   @spec irr_many([[amount]], [option]) :: [{:ok, rate} | {:error, error}]
   def irr_many(series, opts \\ []) when is_list(series) and is_list(opts) do
-    opts = options(opts)
+    opts = options(opts, :rate)
 
     series
     |> Enum.map(&prepare_periodic/1)
@@ -259,15 +328,18 @@ defmodule Finance.CashFlow do
 
   @doc "Same as `npv/2`, and additionally takes a `:precision` option. See `npv/2`."
   @spec npv(rate, [amount], [option]) :: {:ok, number} | {:error, error}
-  def npv(_rate, [], _opts), do: {:error, :insufficient_data}
-
   def npv(rate, amounts, opts)
       when is_number(rate) and is_list(amounts) and is_list(opts) do
-    opts = options(opts)
+    # Validate options before the data checks: a bad option is a caller error and
+    # raises even when the data would also be rejected.
+    opts = options(opts, :value)
 
     with :ok <- check_rate(rate),
          :ok <- check_currency(amounts) do
-      {:ok, round_value(present_value(periodic_flows(amounts), rate), opts)}
+      case amounts do
+        [] -> {:error, :insufficient_data}
+        _ -> {:ok, round_value(present_value(periodic_flows(amounts), rate), opts)}
+      end
     end
   end
 
@@ -295,7 +367,7 @@ defmodule Finance.CashFlow do
   def mirr(amounts, finance_rate, reinvest_rate, opts \\ [])
       when is_list(amounts) and is_number(finance_rate) and is_number(reinvest_rate) and
              is_list(opts) do
-    opts = options(opts)
+    opts = options(opts, :value)
 
     with :ok <- check_currency(amounts) do
       values = Enum.map(amounts, &to_amount/1)
@@ -358,9 +430,9 @@ defmodule Finance.CashFlow do
   defp zip(_dates, _values, _opts), do: {:error, :mismatched_lengths}
 
   defp compute(cash_flows, opts) do
-    opts = options(opts)
+    opts = options(opts, :dated_rate)
 
-    with {:ok, flows} <- normalize(cash_flows),
+    with {:ok, flows} <- normalize(cash_flows, Keyword.fetch!(opts, :basis)),
          :ok <- validate(flows) do
       resolve_solver(opts).solve(flows, opts)
     end
@@ -384,8 +456,8 @@ defmodule Finance.CashFlow do
     results
   end
 
-  defp prepare_dated(cash_flows) when is_list(cash_flows) do
-    with {:ok, flows} <- normalize(cash_flows),
+  defp prepare_dated(cash_flows, basis) when is_list(cash_flows) do
+    with {:ok, flows} <- normalize(cash_flows, basis),
          :ok <- validate(flows) do
       {:ready, flows}
     end
@@ -402,11 +474,12 @@ defmodule Finance.CashFlow do
     end
   end
 
-  # Parse dates, re-express each flow's time as years since the earliest date,
-  # and merge flows that fall on the same date.
-  defp normalize([]), do: {:error, :insufficient_data}
+  # Parse dates, re-express each flow's time as the year fraction since the
+  # earliest date under `basis`, and merge flows that share a period — same date,
+  # or distinct dates a 30/360 basis maps to the same fraction.
+  defp normalize([], _basis), do: {:error, :insufficient_data}
 
-  defp normalize(cash_flows) do
+  defp normalize(cash_flows, basis) do
     amounts = Enum.map(cash_flows, fn {_date, amount} -> amount end)
 
     with :ok <- check_currency(amounts),
@@ -416,7 +489,7 @@ defmodule Finance.CashFlow do
       flows =
         parsed
         |> Enum.reduce(%{}, fn {date, amount}, acc ->
-          period = Date.diff(date, min_date) / @days_in_year
+          period = Finance.DayCount.year_fraction(min_date, date, basis)
           Map.update(acc, period, amount, &(&1 + amount))
         end)
         |> Enum.sort()
@@ -456,4 +529,33 @@ defmodule Finance.CashFlow do
   defp signed_both_ways?(amounts) do
     Enum.any?(amounts, &(&1 > 0)) and Enum.any?(amounts, &(&1 < 0))
   end
+
+  # Amounts as floats in chronological order: `{date, amount}` pairs are sorted by
+  # date, a bare list of amounts is taken as given.
+  defp amounts_in_order(cash_flows) do
+    if pairs?(cash_flows) do
+      cash_flows
+      |> Enum.sort_by(fn {date, _amount} -> to_comparable_date(date) end, Date)
+      |> Enum.map(fn {_date, amount} -> to_amount(amount) end)
+    else
+      Enum.map(cash_flows, &to_amount/1)
+    end
+  end
+
+  defp to_comparable_date(%Date{} = date), do: date
+  defp to_comparable_date({y, m, d}), do: Date.new!(y, m, d)
+
+  # Count the sign changes in a sequence, ignoring zeros (a zero flow is neither a
+  # crossing nor a break).
+  defp sign_changes(amounts) do
+    amounts
+    |> Enum.map(&sign/1)
+    |> Enum.reject(&(&1 == 0))
+    |> Enum.chunk_every(2, 1, :discard)
+    |> Enum.count(fn [a, b] -> a != b end)
+  end
+
+  defp sign(amount) when amount > 0, do: 1
+  defp sign(amount) when amount < 0, do: -1
+  defp sign(_amount), do: 0
 end

@@ -10,18 +10,20 @@ defmodule Finance.Returns do
 
   The cash-flow functions follow the same convention as `Finance.CashFlow.npv/2`:
   the initial outlay sits at index 0 (undiscounted) and later flows fall at
-  periods 1, 2, ….
+  periods 1, 2, …. Amounts and prices accept the same types as `Finance.CashFlow`
+  — plain numbers, `Decimal`, or `ex_money` `%Money{}` values.
   """
 
-  import Finance.Shared, only: [round_value: 2, unwrap!: 1, present_value: 2, discount_factor: 2]
+  import Finance.Shared,
+    only: [round_value: 2, unwrap!: 1, present_value: 2, discount_factor: 2, to_amount: 1]
 
   @type error :: Finance.error()
 
   @precision_options_schema NimbleOptions.new!(
                               precision: [
-                                type: :non_neg_integer,
+                                type: {:in, 0..15},
                                 default: 6,
-                                doc: "decimal places the result is rounded to"
+                                doc: "decimal places the result is rounded to (0..15)"
                               ]
                             )
 
@@ -31,9 +33,9 @@ defmodule Finance.Returns do
                           doc: "if given, annualise the result over this many periods a year"
                         ],
                         precision: [
-                          type: :non_neg_integer,
+                          type: {:in, 0..15},
                           default: 6,
-                          doc: "decimal places the result is rounded to"
+                          doc: "decimal places the result is rounded to (0..15)"
                         ]
                       )
 
@@ -51,9 +53,9 @@ defmodule Finance.Returns do
                                    "how to measure each period's return: `:simple` `(b - a) / a` or `:log` `ln(b / a)`"
                                ],
                                precision: [
-                                 type: :non_neg_integer,
+                                 type: {:in, 0..15},
                                  default: 6,
-                                 doc: "decimal places the result is rounded to"
+                                 doc: "decimal places the result is rounded to (0..15)"
                                ]
                              )
 
@@ -77,7 +79,7 @@ defmodule Finance.Returns do
   def volatility(prices, opts \\ []) when is_list(prices) do
     opts = NimbleOptions.validate!(opts, @volatility_options_schema)
 
-    case period_returns(prices, Keyword.fetch!(opts, :returns)) do
+    case period_returns(Enum.map(prices, &to_amount/1), Keyword.fetch!(opts, :returns)) do
       :error ->
         {:error, :undefined}
 
@@ -138,7 +140,7 @@ defmodule Finance.Returns do
   @spec payback_period([number], keyword) :: {:ok, float} | {:error, error}
   def payback_period(cash_flows, opts \\ []) when is_list(cash_flows) and is_list(opts) do
     opts = NimbleOptions.validate!(opts, @precision_options_schema)
-    recovery_result(cash_flows, opts)
+    recovery_result(Enum.map(cash_flows, &to_amount/1), opts)
   end
 
   @doc "Same as `payback_period/2`, but returns the value directly and raises `ArgumentError` on error."
@@ -160,7 +162,7 @@ defmodule Finance.Returns do
 
     if 1 + rate <= 0,
       do: {:error, :undefined},
-      else: recovery_result(discount_flows(cash_flows, rate), opts)
+      else: recovery_result(discount_flows(Enum.map(cash_flows, &to_amount/1), rate), opts)
   end
 
   @doc "Same as `discounted_payback_period/3`, but returns the value directly and raises `ArgumentError` on error."
@@ -184,7 +186,7 @@ defmodule Finance.Returns do
   def profitability_index(cash_flows, rate, opts \\ [])
       when is_list(cash_flows) and is_number(rate) and is_list(opts) do
     opts = NimbleOptions.validate!(opts, @precision_options_schema)
-    profitability(cash_flows, rate, opts)
+    profitability(Enum.map(cash_flows, &to_amount/1), rate, opts)
   end
 
   @doc "Same as `profitability_index/3`, but returns the value directly and raises `ArgumentError` on error."

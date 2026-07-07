@@ -1,7 +1,7 @@
 defmodule Finance.MixProject do
   use Mix.Project
 
-  @version "1.6.1"
+  @version "1.7.0"
   @source_url "https://github.com/tubedude/finance-elixir"
 
   def project do
@@ -59,7 +59,20 @@ defmodule Finance.MixProject do
     [
       main: "Finance",
       source_url: @source_url,
-      extras: ["README.md", "CHANGELOG.md"]
+      source_ref: "v#{@version}",
+      extras: ["README.md", "CHANGELOG.md"],
+      groups_for_modules: [
+        "Cash flow": [Finance.CashFlow],
+        "Time value of money": [Finance.TVM],
+        "Fixed income": [Finance.Bonds],
+        Metrics: [Finance.Returns, Finance.Rates, Finance.Depreciation],
+        "Extension points": [
+          Finance.Solver,
+          Finance.Solver.Newton,
+          Finance.Solver.Brent,
+          Finance.DayCount
+        ]
+      ]
     ]
   end
 

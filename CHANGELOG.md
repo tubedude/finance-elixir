@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.7.0 — 2026-07-06
+
+### Added
+- **Day-count conventions.** `xirr`/`xnpv` (and `xnfv`) take a `:basis` option
+  selecting how the year fraction between dates is measured. Five conventions ship
+  built in — `:actual_365` (the default, so existing results are unchanged),
+  `:actual_360`, `:actual_actual` (ISDA), `:thirty_360` (US/NASD), and
+  `:thirty_e_360` (Eurobond). `:basis` also accepts any module implementing the new
+  `Finance.DayCount` behaviour, so calendar-based conventions a dependency-free
+  library can't carry (Brazilian Business/252, say) plug in from your app.
+- `Finance.CashFlow.xnfv/2,3` (+ `xnfv!`) — net future value of dated cash flows,
+  the future-value mirror of `xnpv`. A future value too large for a float returns
+  `{:error, :undefined}`.
+- `Finance.CashFlow.conventional?/1` — whether a series changes sign exactly once
+  (a single, unambiguous IRR); a `false` warns of possible multiple IRRs before
+  solving.
+- The `Finance.Returns` cash-flow metrics (`payback_period`,
+  `discounted_payback_period`, `profitability_index`, `volatility`) accept
+  `Decimal` and `%Money{}` amounts, like `Finance.CashFlow` already did.
+
+### Changed
+- Every function now validates only the options it actually uses, so an
+  inapplicable option — a `:basis` on periodic `irr`, a `:guess` on `xnpv` —
+  raises `NimbleOptions.ValidationError` instead of being silently ignored.
+- `:precision` is validated as `0..15` in the `Finance.Returns` and
+  `amortization_schedule` schemas too, completing the 1.6.1 change (they still
+  accepted any non-negative integer and crashed in `Float.round/2` past 15).
+
 ## 1.6.1 — 2026-07-06
 
 ### Fixed

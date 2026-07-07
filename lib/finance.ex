@@ -5,8 +5,9 @@ defmodule Finance do
 
   The functions are organised into domain modules:
 
-    * `Finance.CashFlow` — net present value and internal rate of return
-      (`npv`, `xnpv`, `irr`, `xirr`, `mirr`), plus batched `irr_many`/`xirr_many`.
+    * `Finance.CashFlow` — net present/future value and internal rate of return
+      (`npv`, `xnpv`, `xnfv`, `irr`, `xirr`, `mirr`), `conventional?`, plus batched
+      `irr_many`/`xirr_many`.
     * `Finance.TVM` — time value of money (`pv`, `fv`, `pmt`, `ipmt`, `ppmt`,
       `nper`, `rate`) and `amortization_schedule`.
     * `Finance.Rates` — rate conversions (`effective_annual_rate`,
@@ -20,6 +21,8 @@ defmodule Finance do
       swappable via the `:solver` option or `config :finance, solver: MySolver`
       (the default is `Finance.Solver.Newton`; `Finance.Solver.Brent` is a
       derivative-free alternative that is faster on long-horizon flows).
+    * `Finance.DayCount` — the day-count convention for dated flows, selected with
+      the `:basis` option; ships five conventions and takes a custom module.
 
   ## Deprecated flat API
 
@@ -56,13 +59,18 @@ defmodule Finance do
   @typedoc "An annual rate of return expressed as a fraction, so `0.1` means 10%."
   @type rate :: float
 
-  @typedoc "A keyword option accepted by the rate-finding and value functions."
+  @typedoc """
+  A keyword option accepted by the rate-finding and value functions. Each function
+  validates the subset it actually uses — an option a function ignores raises
+  rather than being silently accepted.
+  """
   @type option ::
           {:guess, number}
           | {:tolerance, number}
           | {:max_iterations, pos_integer}
           | {:precision, non_neg_integer}
           | {:solver, module}
+          | {:basis, Finance.DayCount.basis()}
 
   @typedoc "A reason returned as `{:error, reason}` when the data can't yield a result."
   @type error ::
