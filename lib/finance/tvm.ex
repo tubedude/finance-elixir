@@ -11,7 +11,7 @@ defmodule Finance.TVM do
   money you receive is positive, money you pay out is negative.
   """
 
-  import Finance.Shared, only: [unwrap!: 1, options: 1, resolve_solver: 1]
+  import Finance.Shared, only: [unwrap!: 1, options: 2, resolve_solver: 1]
 
   @type rate :: Finance.rate()
   @type option :: Finance.option()
@@ -31,9 +31,9 @@ defmodule Finance.TVM do
 
   @schedule_options_schema NimbleOptions.new!(
                              precision: [
-                               type: :non_neg_integer,
+                               type: {:in, 0..15},
                                default: 2,
-                               doc: "decimal places each monetary column is rounded to"
+                               doc: "decimal places each monetary column is rounded to (0..15)"
                              ]
                            )
 
@@ -370,7 +370,7 @@ defmodule Finance.TVM do
     n = trunc(nper)
 
     if nper == n and n > 0 do
-      opts = options(opts)
+      opts = options(opts, :rate)
       resolve_solver(opts).solve(tvm_flows(n, pmt, pv, fv, type), opts)
     else
       {:error, :undefined}

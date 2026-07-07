@@ -166,6 +166,58 @@ defmodule FinanceTest do
       assert Finance.CashFlow.irr([-1000, 1100], guess: 1) == {:ok, 0.1}
       assert {:ok, _rate} = Finance.CashFlow.irr([-1000, 1100], tolerance: 1)
     end
+
+    test "an option a function doesn't use raises instead of being silently ignored" do
+      # :basis is meaningless on periodic flows — accepting it would let a user
+      # believe the convention took effect.
+      assert_raise NimbleOptions.ValidationError, fn ->
+        Finance.CashFlow.irr([-1000, 1100], basis: :thirty_360)
+      end
+
+      # Solver options are meaningless on closed-form values.
+      assert_raise NimbleOptions.ValidationError, fn ->
+        Finance.CashFlow.xnpv(0.1, [{~D[2019-01-01], -1000}], guess: 5.0)
+      end
+
+      assert_raise NimbleOptions.ValidationError, fn ->
+        Finance.CashFlow.npv(0.1, [-1000, 1100], solver: Finance.Solver.Brent)
+      end
+
+      assert_raise NimbleOptions.ValidationError, fn ->
+        Finance.Bonds.duration(0.05, 0.05, 10, 2, guess: 9.9)
+      end
+
+      # ytm solves but isn't dated, so :basis doesn't apply.
+      assert_raise NimbleOptions.ValidationError, fn ->
+        Finance.Bonds.ytm(100, 0.05, 100.0, 10, 2, basis: :actual_360)
+      end
+    end
+
+    test "options are validated even when the data would also be rejected" do
+      assert_raise NimbleOptions.ValidationError, fn ->
+        Finance.CashFlow.npv(0.1, [], bogus: 1)
+      end
+
+      assert Finance.CashFlow.npv(0.1, []) == {:error, :insufficient_data}
+    end
+
+    test "precision is capped at 15 in every schema" do
+      assert_raise NimbleOptions.ValidationError, fn ->
+        Finance.Returns.cagr(1000, 2000, 10, precision: 16)
+      end
+
+      assert_raise NimbleOptions.ValidationError, fn ->
+        Finance.Returns.volatility([100, 102, 101], precision: 16)
+      end
+
+      assert_raise NimbleOptions.ValidationError, fn ->
+        Finance.Returns.twr([0.1, 0.2], precision: 16)
+      end
+
+      assert_raise NimbleOptions.ValidationError, fn ->
+        Finance.TVM.amortization_schedule(0.05, 12, 1000, precision: 16)
+      end
+    end
   end
 
   describe "errors" do
@@ -1211,6 +1263,22 @@ defmodule FinanceTest do
         Finance.Returns.cagr(1000, 2000, 10, precison: 2)
       end
     end
+
+    test "the cash-flow metrics accept Decimal and Money amounts like CashFlow" do
+      decimals = Enum.map([-1000, 500, 500, 500], &Decimal.new/1)
+      monies = Enum.map([-1000, 500, 500, 500], &money(:USD, &1))
+
+      assert Finance.Returns.payback_period(decimals) == {:ok, 2.0}
+      assert Finance.Returns.payback_period(monies) == {:ok, 2.0}
+
+      assert Finance.Returns.discounted_payback_period(decimals, 0.0) == {:ok, 2.0}
+
+      assert Finance.Returns.profitability_index(Enum.map([-1000, 1100], &Decimal.new/1), 0.1) ==
+               {:ok, 1.0}
+
+      assert Finance.Returns.volatility(Enum.map([100, 102, 101, 103, 105], &Decimal.new/1)) ==
+               Finance.Returns.volatility([100, 102, 101, 103, 105])
+    end
   end
 
   describe "volatility" do
@@ -1308,6 +1376,11 @@ defmodule FinanceTest do
     test "a par bond yields its coupon rate" do
       assert Finance.Bonds.price(100, 0.05, 0.05, 10) == {:ok, 100.0}
       assert Finance.Bonds.ytm(100, 0.05, 100.0, 10) == {:ok, 0.05}
+    end
+
+    test "fractional years are fine when they make whole coupon periods" do
+      # 2.5 years at semiannual freq is exactly 5 periods — supported, not an accident.
+      assert Finance.Bonds.price(1000, 0.06, 0.06, 2.5, 2) == {:ok, 1000.0}
     end
 
     test "the annual yield is rounded once, not twice through the period rate" do
@@ -1589,6 +1662,14 @@ defmodule FinanceTest do
                       1.0e-12
     end
 
+    test "30/360 US leaves Feb 29 alone (plain NASD, no end-of-month rule)" do
+      # The SIA EOM variant would pull a last-of-February start to 30; the shipped
+      # convention deliberately does not — this pins that choice.
+      assert_in_delta Finance.DayCount.year_fraction(~D[2020-02-29], ~D[2020-03-31], :thirty_360),
+                      32 / 360,
+                      1.0e-12
+    end
+
     test "same date is zero under every convention" do
       for basis <- Finance.DayCount.bases() do
         assert Finance.DayCount.year_fraction(~D[2020-03-15], ~D[2020-03-15], basis) == 0.0
@@ -1647,6 +1728,31 @@ defmodule FinanceTest do
 
       assert Finance.CashFlow.xirr_many(series, basis: :actual_360) ==
                Enum.map(series, &Finance.CashFlow.xirr(&1, basis: :actual_360))
+
+      # basis and a custom solver survive batch dispatch together
+      assert Finance.CashFlow.xirr_many(series,
+               basis: :actual_360,
+               solver: Finance.Solver.Brent
+             ) ==
+               Enum.map(
+                 series,
+                 &Finance.CashFlow.xirr(&1, basis: :actual_360, solver: Finance.Solver.Brent)
+               )
+    end
+
+    test "cross-function contracts hold under a non-default basis" do
+      # Consecutive Jan-1sts are exactly 1.0 under 30/360 too, so irr == xirr.
+      dates = [~D[2021-01-01], ~D[2022-01-01], ~D[2023-01-01], ~D[2024-01-01]]
+      amounts = [-1000, 500, 500, 300]
+
+      assert Finance.CashFlow.xirr(dates, amounts, basis: :thirty_360) ==
+               Finance.CashFlow.irr(amounts)
+
+      # xnfv = xnpv · (1 + r)^span under any basis (span is 2.0 under 30/360 here).
+      flows = [{~D[2021-01-15], -1000}, {~D[2022-01-15], 500}, {~D[2023-01-15], 700}]
+      assert {:ok, npv} = Finance.CashFlow.xnpv(0.1, flows, basis: :thirty_360, precision: 10)
+      assert {:ok, fv} = Finance.CashFlow.xnfv(0.1, flows, basis: :thirty_360, precision: 10)
+      assert_in_delta fv, npv * :math.pow(1.1, 2), 1.0e-6
     end
   end
 
@@ -1670,6 +1776,12 @@ defmodule FinanceTest do
 
       assert Finance.CashFlow.xnfv(-1.0, [{~D[2021-01-01], -1000}, {~D[2022-01-01], 1100}]) ==
                {:error, :undefined}
+    end
+
+    test "a future value too large for a float is undefined, not a crash" do
+      # Forward compounding overflows where discounting would only underflow.
+      flows = [{~D[2000-01-01], -1}, {~D[2100-01-01], 1}]
+      assert Finance.CashFlow.xnfv(1.0e6, flows) == {:error, :undefined}
     end
 
     test "xnfv!/2 returns the bare value and raises on error" do
@@ -1748,6 +1860,19 @@ defmodule FinanceTest do
 
           assert_in_delta found, rate, 1.0e-3
         end
+      end
+    end
+
+    property "Decimal and Money amounts produce exactly the same rate as plain numbers" do
+      # The coercion seam (to_amount/check_currency) must be value-transparent:
+      # wrapping every amount changes nothing about the solve.
+      check all(amounts <- list_of(integer(-1_000_000..1_000_000), min_length: 2, max_length: 10)) do
+        plain = Finance.CashFlow.irr(amounts)
+        decimals = Finance.CashFlow.irr(Enum.map(amounts, &Decimal.new/1))
+        monies = Finance.CashFlow.irr(Enum.map(amounts, &money(:USD, &1)))
+
+        assert decimals == plain
+        assert monies == plain
       end
     end
 

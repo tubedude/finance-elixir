@@ -59,7 +59,20 @@ defmodule Finance.MixProject do
     [
       main: "Finance",
       source_url: @source_url,
-      extras: ["README.md", "CHANGELOG.md"]
+      source_ref: "v#{@version}",
+      extras: ["README.md", "CHANGELOG.md"],
+      groups_for_modules: [
+        "Cash flow": [Finance.CashFlow],
+        "Time value of money": [Finance.TVM],
+        "Fixed income": [Finance.Bonds],
+        Metrics: [Finance.Returns, Finance.Rates, Finance.Depreciation],
+        "Extension points": [
+          Finance.Solver,
+          Finance.Solver.Newton,
+          Finance.Solver.Brent,
+          Finance.DayCount
+        ]
+      ]
     ]
   end
 

@@ -11,15 +11,24 @@
   `Finance.DayCount` behaviour, so calendar-based conventions a dependency-free
   library can't carry (Brazilian Business/252, say) plug in from your app.
 - `Finance.CashFlow.xnfv/2,3` (+ `xnfv!`) — net future value of dated cash flows,
-  the future-value mirror of `xnpv`.
+  the future-value mirror of `xnpv`. A future value too large for a float returns
+  `{:error, :undefined}`.
 - `Finance.CashFlow.conventional?/1` — whether a series changes sign exactly once
   (a single, unambiguous IRR); a `false` warns of possible multiple IRRs before
   solving.
+- The `Finance.Returns` cash-flow metrics (`payback_period`,
+  `discounted_payback_period`, `profitability_index`, `volatility`) accept
+  `Decimal` and `%Money{}` amounts, like `Finance.CashFlow` already did.
 
 ### Changed
-- Day-count conventions are cross-checked against Excel `YEARFRAC` reference
-  values, and a property fuzzes the year fraction (non-negative forward, Actual/365
-  additive) across every convention.
+- Every function now validates only the options it actually uses, so an
+  inapplicable option — a `:basis` on periodic `irr`, a `:guess` on `xnpv` —
+  raises `NimbleOptions.ValidationError` instead of being silently ignored.
+- `:precision` is validated as `0..15` in the `Finance.Returns` and
+  `amortization_schedule` schemas too, completing the 1.6.1 change (they still
+  accepted any non-negative integer and crashed in `Float.round/2` past 15).
+
+## 1.6.1 — 2026-07-06
 
 ### Fixed
 - A rate at or below -100% now returns `{:error, :undefined}` instead of raising

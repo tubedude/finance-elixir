@@ -59,13 +59,18 @@ defmodule Finance do
   @typedoc "An annual rate of return expressed as a fraction, so `0.1` means 10%."
   @type rate :: float
 
-  @typedoc "A keyword option accepted by the rate-finding and value functions."
+  @typedoc """
+  A keyword option accepted by the rate-finding and value functions. Each function
+  validates the subset it actually uses — an option a function ignores raises
+  rather than being silently accepted.
+  """
   @type option ::
           {:guess, number}
           | {:tolerance, number}
           | {:max_iterations, pos_integer}
           | {:precision, non_neg_integer}
           | {:solver, module}
+          | {:basis, Finance.DayCount.basis()}
 
   @typedoc "A reason returned as `{:error, reason}` when the data can't yield a result."
   @type error ::

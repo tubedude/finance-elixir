@@ -4,55 +4,71 @@ defmodule Finance.Shared do
   # coercion, result rounding, the bang-variant unwrap, and the shared solver
   # options schema. Not part of the public API. Public types live in `Finance`.
 
-  @options_schema NimbleOptions.new!(
-                    guess: [
-                      type: {:or, [:float, :integer]},
-                      default: 0.1,
-                      doc:
-                        "initial rate for the solver; for a series with more than one rate, selects the one nearest the guess"
-                    ],
-                    tolerance: [
-                      type: {:or, [:float, :integer]},
-                      default: 1.0e-9,
-                      doc:
-                        "convergence threshold on the rate: iterating stops once the step (or bracket width) falls below it"
-                    ],
-                    max_iterations: [
-                      type: :pos_integer,
-                      default: 100,
-                      doc:
-                        "cap on solver iterations; the current bracketed estimate is returned if it is reached"
-                    ],
-                    precision: [
-                      type: {:in, 0..15},
-                      default: 6,
-                      doc: "decimal places the result is rounded to (0..15)"
-                    ],
-                    solver: [
-                      type: :atom,
-                      doc:
-                        "module implementing the `Finance.Solver` behaviour; defaults to `Finance.Solver.Newton`, with the derivative-free `Finance.Solver.Brent` also available"
-                    ],
-                    basis: [
-                      type: :atom,
-                      default: :actual_365,
-                      doc:
-                        "day-count convention for dated flows (`xirr`/`xnpv`/`xnfv`): a built-in atom or a module implementing `Finance.DayCount` (see that module)"
-                    ]
-                  )
+  @option_definitions [
+    guess: [
+      type: {:or, [:float, :integer]},
+      default: 0.1,
+      doc:
+        "initial rate for the solver; for a series with more than one rate, selects the one nearest the guess"
+    ],
+    tolerance: [
+      type: {:or, [:float, :integer]},
+      default: 1.0e-9,
+      doc:
+        "convergence threshold on the rate: iterating stops once the step (or bracket width) falls below it"
+    ],
+    max_iterations: [
+      type: :pos_integer,
+      default: 100,
+      doc: "cap on solver iterations; the current bracketed estimate is returned if it is reached"
+    ],
+    precision: [
+      type: {:in, 0..15},
+      default: 6,
+      doc: "decimal places the result is rounded to (0..15)"
+    ],
+    solver: [
+      type: :atom,
+      doc:
+        "module implementing the `Finance.Solver` behaviour; defaults to `Finance.Solver.Newton`, with the derivative-free `Finance.Solver.Brent` also available"
+    ],
+    basis: [
+      type: :atom,
+      default: :actual_365,
+      doc:
+        "day-count convention for dated flows (`xirr`/`xnpv`/`xnfv`): a built-in atom or a module implementing `Finance.DayCount` (see that module)"
+    ]
+  ]
 
-  @options_docs NimbleOptions.docs(@options_schema)
+  @solver_keys [:guess, :tolerance, :max_iterations, :precision, :solver]
+
+  # Each function validates only the options it actually uses, so a meaningless
+  # option (a :basis on periodic irr, a :guess on xnpv) raises instead of being
+  # silently ignored.
+  @schemas %{
+    # dated rate solve: xirr, xirr_many
+    dated_rate: NimbleOptions.new!(@option_definitions),
+    # periodic/undated rate solve: irr, irr_many, TVM.rate, Bonds.ytm
+    rate: NimbleOptions.new!(Keyword.take(@option_definitions, @solver_keys)),
+    # dated value: xnpv, xnfv
+    dated_value: NimbleOptions.new!(Keyword.take(@option_definitions, [:precision, :basis])),
+    # closed-form value: npv, mirr, Bonds price and risk metrics
+    value: NimbleOptions.new!(Keyword.take(@option_definitions, [:precision]))
+  }
+
+  @options_docs NimbleOptions.docs(NimbleOptions.new!(@option_definitions))
 
   @doc "Markdown docs for the shared solver options, for injection into moduledocs."
   @spec options_docs() :: String.t()
   def options_docs, do: @options_docs
 
   @doc """
-  Validates options against the shared schema, applying defaults. Raises
-  `NimbleOptions.ValidationError` on an unknown key or bad value.
+  Validates options against the schema for the given kind of function, applying
+  defaults. Raises `NimbleOptions.ValidationError` on an unknown or inapplicable
+  key, or a bad value.
   """
-  @spec options(keyword) :: keyword
-  def options(opts), do: NimbleOptions.validate!(opts, @options_schema)
+  @spec options(keyword, :dated_rate | :rate | :dated_value | :value) :: keyword
+  def options(opts, kind), do: NimbleOptions.validate!(opts, Map.fetch!(@schemas, kind))
 
   @doc "The solver module to use: a `:solver` option, else the app env, else `Finance.Solver.Newton`."
   @spec resolve_solver(keyword) :: module

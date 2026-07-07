@@ -29,7 +29,8 @@ defmodule Finance.CashFlow do
       to_amount: 1,
       round_value: 2,
       unwrap!: 1,
-      options: 1,
+      safely: 1,
+      options: 2,
       resolve_solver: 1,
       present_value: 2,
       discount_factor: 2,
@@ -50,11 +51,11 @@ defmodule Finance.CashFlow do
   return that the flows imply, given when each one lands.
 
   Reach for this when your cash flows happen on irregular dates rather than at
-  neat intervals. See `xirr/2` if you want to pass options or use the two-list
-  form.
+  neat intervals. The rate is a fraction per year, so `{:ok, 0.2}` means 20%.
+  See `xirr/2` if you want to pass options or use the two-list form.
 
-      iex> Finance.CashFlow.xirr([{~D[2015-06-01], 1_000_000}, {~D[2015-10-01], -2_200_000}, {~D[2015-11-01], -800_000}])
-      {:ok, 21.118359}
+      iex> Finance.CashFlow.xirr([{~D[2019-01-01], -1000}, {~D[2020-01-01], 1200}])
+      {:ok, 0.2}
   """
   @spec xirr([cash_flow]) :: {:ok, rate} | {:error, error}
   def xirr(cash_flows) when is_list(cash_flows), do: xirr(cash_flows, [])
@@ -123,7 +124,7 @@ defmodule Finance.CashFlow do
   """
   @spec xirr_many([[cash_flow]], [option]) :: [{:ok, rate} | {:error, error}]
   def xirr_many(series, opts \\ []) when is_list(series) and is_list(opts) do
-    opts = options(opts)
+    opts = options(opts, :dated_rate)
 
     basis = Keyword.fetch!(opts, :basis)
 
@@ -166,7 +167,7 @@ defmodule Finance.CashFlow do
   @spec xnpv(rate, [cash_flow], [option]) :: {:ok, number} | {:error, error}
   def xnpv(rate, cash_flows, opts)
       when is_number(rate) and is_list(cash_flows) and is_list(opts) do
-    opts = options(opts)
+    opts = options(opts, :dated_value)
 
     with :ok <- check_rate(rate),
          {:ok, flows} <- normalize(cash_flows, Keyword.fetch!(opts, :basis)) do
@@ -185,8 +186,8 @@ defmodule Finance.CashFlow do
   same `:precision` and `:basis` options.
 
   Unlike `xnpv/2`, this compounds *forward*, so an extreme `rate` over a long span
-  can overflow and raise `ArithmeticError` rather than returning a value — a future
-  value that large has no float representation.
+  can produce a future value too large for a float; that comes back as
+  `{:error, :undefined}`.
 
       iex> flows = [{~D[2021-01-01], -1000}, {~D[2022-01-01], 1100}]
       iex> Finance.CashFlow.xnfv(0.1, flows)
@@ -201,12 +202,23 @@ defmodule Finance.CashFlow do
   @spec xnfv(rate, [cash_flow], [option]) :: {:ok, number} | {:error, error}
   def xnfv(rate, cash_flows, opts)
       when is_number(rate) and is_list(cash_flows) and is_list(opts) do
-    opts = options(opts)
+    opts = options(opts, :dated_value)
 
     with :ok <- check_rate(rate),
          {:ok, flows} <- normalize(cash_flows, Keyword.fetch!(opts, :basis)) do
-      horizon = flows |> Enum.map(fn {t, _amount} -> t end) |> Enum.max()
-      {:ok, round_value(present_value(flows, rate) * :math.pow(1 + rate, horizon), opts)}
+      future_value(flows, rate, opts)
+    end
+  end
+
+  # Compound the present value forward to the series' horizon. Forward compounding
+  # can overflow where discounting only underflows; an unrepresentable future value
+  # is undefined, not a crash.
+  defp future_value(flows, rate, opts) do
+    horizon = flows |> Enum.map(fn {t, _amount} -> t end) |> Enum.max()
+
+    case safely(fn -> present_value(flows, rate) * :math.pow(1 + rate, horizon) end) do
+      :diverged -> {:error, :undefined}
+      value -> {:ok, round_value(value, opts)}
     end
   end
 
@@ -256,7 +268,7 @@ defmodule Finance.CashFlow do
   @doc "Same as `irr/1`, and additionally takes the same options as `xirr/2`."
   @spec irr([amount], [option]) :: {:ok, rate} | {:error, error}
   def irr(amounts, opts) when is_list(amounts) and is_list(opts) do
-    opts = options(opts)
+    opts = options(opts, :rate)
     flows = periodic_flows(amounts)
 
     with :ok <- check_currency(amounts), :ok <- validate(flows) do
@@ -281,7 +293,7 @@ defmodule Finance.CashFlow do
   """
   @spec irr_many([[amount]], [option]) :: [{:ok, rate} | {:error, error}]
   def irr_many(series, opts \\ []) when is_list(series) and is_list(opts) do
-    opts = options(opts)
+    opts = options(opts, :rate)
 
     series
     |> Enum.map(&prepare_periodic/1)
@@ -316,15 +328,18 @@ defmodule Finance.CashFlow do
 
   @doc "Same as `npv/2`, and additionally takes a `:precision` option. See `npv/2`."
   @spec npv(rate, [amount], [option]) :: {:ok, number} | {:error, error}
-  def npv(_rate, [], _opts), do: {:error, :insufficient_data}
-
   def npv(rate, amounts, opts)
       when is_number(rate) and is_list(amounts) and is_list(opts) do
-    opts = options(opts)
+    # Validate options before the data checks: a bad option is a caller error and
+    # raises even when the data would also be rejected.
+    opts = options(opts, :value)
 
     with :ok <- check_rate(rate),
          :ok <- check_currency(amounts) do
-      {:ok, round_value(present_value(periodic_flows(amounts), rate), opts)}
+      case amounts do
+        [] -> {:error, :insufficient_data}
+        _ -> {:ok, round_value(present_value(periodic_flows(amounts), rate), opts)}
+      end
     end
   end
 
@@ -352,7 +367,7 @@ defmodule Finance.CashFlow do
   def mirr(amounts, finance_rate, reinvest_rate, opts \\ [])
       when is_list(amounts) and is_number(finance_rate) and is_number(reinvest_rate) and
              is_list(opts) do
-    opts = options(opts)
+    opts = options(opts, :value)
 
     with :ok <- check_currency(amounts) do
       values = Enum.map(amounts, &to_amount/1)
@@ -415,7 +430,7 @@ defmodule Finance.CashFlow do
   defp zip(_dates, _values, _opts), do: {:error, :mismatched_lengths}
 
   defp compute(cash_flows, opts) do
-    opts = options(opts)
+    opts = options(opts, :dated_rate)
 
     with {:ok, flows} <- normalize(cash_flows, Keyword.fetch!(opts, :basis)),
          :ok <- validate(flows) do
