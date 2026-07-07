@@ -558,6 +558,44 @@ defmodule FinanceTest do
     end
   end
 
+  describe "Apache POI (Java) issue corpus" do
+    test "a 46-flow near-zero-rate loan converges (POI bug 64137)" do
+      # Two large outflows then 44 small monthly inflows: the rate is only ~-0.95% a
+      # month, and POI's fixed-iteration Newton reported non-convergence. Excel gives
+      # -0.009463562705856.
+      series =
+        [-30_000.0, -49_970.7425] ++
+          [
+            29.2575,
+            146.2875,
+            380.34749999999997,
+            581.5,
+            581.5,
+            731.4374999999999,
+            731.4374999999999,
+            731.4374999999999,
+            877.725,
+            877.725,
+            877.725,
+            1024.0125,
+            1024.0125,
+            1024.0125,
+            1170.3,
+            1170.3,
+            1170.3,
+            1170.3,
+            1316.5874999999999,
+            1316.5874999999999,
+            1316.5874999999999,
+            1316.5874999999999
+          ] ++ List.duplicate(1462.8749999999998, 21) ++ [10_000.0]
+
+      assert {:ok, rate} = Finance.CashFlow.irr(series, precision: 12)
+      assert_periodic_root(rate, series)
+      assert_in_delta rate, -0.009463562706, 1.0e-6
+    end
+  end
+
   describe "java-xirr (Java) issue corpus" do
     test "an overflowing 31-flow series matches Google Sheets (#17)" do
       # java-xirr overflowed; Sheets/LibreOffice give -0.809918434570599.
@@ -733,6 +771,42 @@ defmodule FinanceTest do
                Finance.CashFlow.xirr(flows, precision: 10, solver: Finance.Solver.Brent)
 
       assert_dated_root(brent, flows)
+    end
+
+    test "an even steeper negative yield than #5 is still found (#5b)" do
+      # #5 with one extra outflow before the payout drives the root below -83%.
+      flows = [
+        {{2001, 6, 22}, -2610},
+        {{2001, 7, 3}, -2589},
+        {{2001, 7, 5}, -5110},
+        {{2001, 7, 6}, -2550},
+        {{2001, 7, 9}, -5086},
+        {{2001, 7, 10}, -2561},
+        {{2001, 7, 12}, -5040},
+        {{2001, 7, 13}, -2552},
+        {{2001, 7, 16}, -2530},
+        {{2001, 7, 17}, -9840},
+        {{2001, 7, 18}, 38_900}
+      ]
+
+      assert {:ok, rate} = Finance.CashFlow.xirr(flows, precision: 10)
+      assert_dated_root(rate, flows)
+      assert rate < -0.83
+    end
+
+    test "a series with no real IRR reports cleanly, not a spin (#20)" do
+      # One small inflow among five large outflows: NPV never crosses zero, so no
+      # rate exists. java-xirr spun to its iteration cap; the bracketer returns cleanly.
+      flows = [
+        {{2015, 7, 15}, -275_112_000},
+        {{2017, 5, 2}, -57_258_697.67},
+        {{2017, 11, 10}, 2_577_101.75},
+        {{2018, 10, 10}, -2_184_516_955.15},
+        {{2019, 1, 29}, -660_239_840},
+        {{2021, 5, 13}, -26_567_773_295.82}
+      ]
+
+      assert Finance.CashFlow.xirr(flows) == {:error, :did_not_converge}
     end
   end
 
@@ -1111,6 +1185,16 @@ defmodule FinanceTest do
       assert Finance.TVM.rate(10, 100, 1000) == {:error, :did_not_converge}
     end
 
+    test "rate solves the reference cases Excel/POI pin" do
+      # A very small per-period rate over a long horizon (POI bug 65988): a 30-year
+      # monthly loan where a fixed-iteration Newton failed to converge.
+      assert Finance.TVM.rate(360, 6.56, -2000, 0, 0, precision: 12) == {:ok, 0.000948017084}
+      # Microsoft's RATE example: 48-month, -200/mo, 8000 borrowed → 0.7701% a month.
+      assert Finance.TVM.rate(48, -200, 8000) == {:ok, 0.007701}
+      # A deep-negative per-period rate (LibreOffice reference), guess-selected.
+      assert Finance.TVM.rate(3, -10, 900, 1, 0, guess: 0.5) == {:ok, -0.76336}
+    end
+
     test "nper is undefined when 1 + rate <= 0" do
       assert Finance.TVM.nper(-1.5, -100, 1000) == {:error, :undefined}
     end
@@ -1423,6 +1507,13 @@ defmodule FinanceTest do
       assert Finance.Bonds.ytm(100, 0.05, -50.0, 10) == {:error, :did_not_converge}
     end
 
+    test "a discounted zero-coupon bond yields the exact closed-form rate (QuantLib #256)" do
+      # A 1-year zero at 90 (face 100), semiannual: (1 + y/2)^2 = 100/90, so
+      # y = 2*(sqrt(10/9) - 1) = 0.1081851... QuantLib underestimated this
+      # (10.54-10.79% depending on day count); the closed form is exact here.
+      assert Finance.Bonds.ytm(100, 0.0, 90.0, 1, 2) == {:ok, 0.108185}
+    end
+
     test "ytm converges for long-maturity, low-yield bonds (solver overflow fallback)" do
       # Newton overshoots into an overflow on these long-dated flows; the solver
       # must fall through to bisection rather than give up. Regression for a
@@ -1667,6 +1758,42 @@ defmodule FinanceTest do
       # convention deliberately does not — this pins that choice.
       assert_in_delta Finance.DayCount.year_fraction(~D[2020-02-29], ~D[2020-03-31], :thirty_360),
                       32 / 360,
+                      1.0e-12
+    end
+
+    test "Actual/Actual matches the ISDA 2006 gold values (QuantLib daycounters.cpp)" do
+      # Canonical Act/Act (ISDA) anchors from the ISDA 2006 paper, as pinned in
+      # QuantLib's test suite. The first straddles a leap year (184/365 + 182/366).
+      assert_in_delta Finance.DayCount.year_fraction(
+                        ~D[1999-07-01],
+                        ~D[2000-07-01],
+                        :actual_actual
+                      ),
+                      1.0013773486,
+                      1.0e-9
+
+      assert_in_delta Finance.DayCount.year_fraction(
+                        ~D[2003-11-01],
+                        ~D[2004-05-01],
+                        :actual_actual
+                      ),
+                      0.497724380567,
+                      1.0e-9
+
+      assert_in_delta Finance.DayCount.year_fraction(
+                        ~D[1999-02-01],
+                        ~D[1999-07-01],
+                        :actual_actual
+                      ),
+                      0.410958904110,
+                      1.0e-9
+    end
+
+    test "30/360 follows Excel DAYS360, not the NASD end-of-February rule" do
+      # A last-day-of-February start: QuantLib's NASD "USA" 30/360 pulls it to 30
+      # (3 days), but Excel's DAYS360 US — the convention we ship — does not (5 days).
+      assert_in_delta Finance.DayCount.year_fraction(~D[2006-02-28], ~D[2006-03-03], :thirty_360),
+                      5 / 360,
                       1.0e-12
     end
 
