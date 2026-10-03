@@ -33,10 +33,10 @@ defmodule Finance.Shared do
         "module implementing the `Finance.Solver` behaviour; defaults to `Finance.Solver.Newton`, with the derivative-free `Finance.Solver.Brent` also available"
     ],
     basis: [
-      type: :atom,
+      type: {:custom, __MODULE__, :validate_basis, []},
       default: :actual_365,
       doc:
-        "day-count convention for dated flows (`xirr`/`xnpv`/`xnfv`): a built-in atom or a module implementing `Finance.DayCount` (see that module)"
+        "day-count convention for dated flows (`xirr`/`xnpv`/`xnfv`): a built-in atom, a module implementing `Finance.DayCount`, or `{module, opts}` to pass that module settings (see `Finance.DayCount`)"
     ]
   ]
 
@@ -69,6 +69,33 @@ defmodule Finance.Shared do
   """
   @spec options(keyword, :dated_rate | :rate | :dated_value | :value) :: keyword
   def options(opts, kind), do: NimbleOptions.validate!(opts, Map.fetch!(@schemas, kind))
+
+  @doc """
+  NimbleOptions validator for `:basis`: an atom (built-in or module), or a
+  `{module, keyword}` tuple. A built-in convention takes no settings, so a tuple
+  around one is rejected rather than silently ignoring them.
+  """
+  @spec validate_basis(term) :: {:ok, Finance.DayCount.basis()} | {:error, String.t()}
+  def validate_basis(basis) when is_atom(basis), do: {:ok, basis}
+
+  def validate_basis({module, opts} = basis) when is_atom(module) and is_list(opts) do
+    cond do
+      module in Finance.DayCount.bases() ->
+        {:error, "built-in basis #{inspect(module)} takes no settings; pass it without a tuple"}
+
+      Keyword.keyword?(opts) ->
+        {:ok, basis}
+
+      true ->
+        {:error,
+         "expected the settings in a :basis tuple to be a keyword list, got: #{inspect(opts)}"}
+    end
+  end
+
+  def validate_basis(other) do
+    {:error,
+     "expected :basis to be a built-in atom, a module, or {module, keyword}, got: #{inspect(other)}"}
+  end
 
   @doc "The solver module to use: a `:solver` option, else the app env, else `Finance.Solver.Newton`."
   @spec resolve_solver(keyword) :: module

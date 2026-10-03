@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.8.0 — 2026-10-03
+
+### Added
+- `:basis` accepts a `{module, settings}` tuple. `xirr`/`xnpv`/`xnfv` pass
+  `settings` to the custom module's `year_fraction/3`, so a convention that needs
+  extra input (such as a coupon frequency) can get it per call. Before, a custom
+  module always received `[]`. `Finance.DayCount.year_fraction/4` accepts the
+  tuple too, and merges its own `opts` over the settings.
+
+### Changed
+- A `:basis` tuple around a built-in convention (`{:thirty_360, []}`) or with
+  settings that are not a keyword list raises `NimbleOptions.ValidationError`.
+  Built-ins take no settings, so the tuple would only hide a mistake.
+- Clearer `Finance.DayCount` docs: how 30/360 counts days, with examples, and
+  plain wording for the variants and custom conventions.
+
 ## 1.7.0 — 2026-07-06
 
 ### Added

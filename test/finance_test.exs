@@ -16,6 +16,16 @@ defmodule FlatYear do
   def year_fraction(date1, date2, _opts), do: Date.diff(date2, date1) / 300.0
 end
 
+defmodule SizedYear do
+  # A toy custom convention whose year length comes from its settings, used to
+  # check that `basis: {module, settings}` reaches the module.
+  @moduledoc false
+  @behaviour Finance.DayCount
+  @impl true
+  def year_fraction(date1, date2, opts),
+    do: Date.diff(date2, date1) / Keyword.get(opts, :days, 300)
+end
+
 defmodule FinanceTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
@@ -1845,6 +1855,47 @@ defmodule FinanceTest do
       # And it differs from the built-in Actual/365.
       refute Finance.CashFlow.xirr(flows, basis: FlatYear) ==
                Finance.CashFlow.xirr(flows, basis: :actual_365)
+    end
+
+    test ":basis {module, settings} passes the settings to the module" do
+      flows = [{~D[2020-01-01], -1000}, {~D[2020-11-26], 1100}]
+      # 330 days over a 330-day year is t = 1.0, so xnpv is -1000 + 1100/1.1 = 0.
+      assert Finance.CashFlow.xnpv(0.1, flows, basis: {SizedYear, days: 330}) == {:ok, 0.0}
+      assert Finance.CashFlow.xirr(flows, basis: {SizedYear, days: 330}) == {:ok, 0.1}
+
+      assert {:ok, fv} = Finance.CashFlow.xnfv(0.1, flows, basis: {SizedYear, days: 330})
+      assert_in_delta fv, 0.0, 1.0e-6
+
+      assert Finance.CashFlow.xirr_many([flows], basis: {SizedYear, days: 330}) == [{:ok, 0.1}]
+
+      # A plain module gets [] and falls back to its default; same result as FlatYear.
+      assert Finance.CashFlow.xirr(flows, basis: SizedYear) ==
+               Finance.CashFlow.xirr(flows, basis: FlatYear)
+    end
+
+    test "year_fraction/4 merges call opts over the tuple's settings" do
+      basis = {SizedYear, days: 330}
+      assert Finance.DayCount.year_fraction(~D[2020-01-01], ~D[2020-11-26], basis) == 1.0
+
+      assert Finance.DayCount.year_fraction(~D[2020-01-01], ~D[2020-11-26], basis, days: 165) ==
+               2.0
+    end
+
+    test ":basis rejects malformed values" do
+      flows = [{~D[2020-01-01], -1000}, {~D[2021-01-01], 1100}]
+
+      # A built-in takes no settings, so a tuple around one would silently drop them.
+      assert_raise NimbleOptions.ValidationError, ~r/takes no settings/, fn ->
+        Finance.CashFlow.xirr(flows, basis: {:thirty_360, []})
+      end
+
+      assert_raise NimbleOptions.ValidationError, ~r/keyword list/, fn ->
+        Finance.CashFlow.xnpv(0.1, flows, basis: {SizedYear, [330]})
+      end
+
+      assert_raise NimbleOptions.ValidationError, ~r/expected :basis/, fn ->
+        Finance.CashFlow.xirr(flows, basis: "thirty_360")
+      end
     end
 
     test "xirr_many threads the basis through the batch" do
