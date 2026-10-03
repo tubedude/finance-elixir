@@ -37,31 +37,42 @@ defmodule Finance.DayCount do
     * **Eurobond (`:thirty_e_360`)**: a day 31 becomes day 30, on both the start
       and the end date.
 
-  Both "Actual/Actual" and "30/360" name more than one method, so to be precise
-  about which ones ship:
+  ## Which variant you get
 
-    * `:actual_actual` is **Actual/Actual (ISDA)** — the sensible choice for
-      irregular cash flows. Each calendar year the span touches contributes its own
-      days over its own length, so leap years are weighted exactly. It is *not*
-      Excel's `YEARFRAC(_, 1)`, which uses a different average-year-length method.
-    * `:thirty_360` is the basic **US/NASD** rule (Excel `DAYS360` US): day 31 is
-      pulled to 30, with **no** end-of-February adjustment (that EOM behaviour is a
-      separate SIA variant, not shipped).
-    * `:thirty_e_360` leaves February alone, so `Feb 28 → Mar 1` counts three days.
-      That is a known property of the convention, not a bug.
+  The names "Actual/Actual" and "30/360" each cover several slightly different
+  methods. These are the ones this library uses:
 
-  Because the 30/360 conventions round day-of-month, two *distinct* dates can map to
-  the same year fraction (e.g. the 30th and 31st of a month). `xirr`/`xnpv` merge
-  flows that share a period, so under a 30/360 basis a two-flow series on adjacent
-  such dates collapses to one period — and can then report `:insufficient_data`.
+    * `:actual_actual` is **Actual/Actual (ISDA)**. Each calendar year in the span
+      counts its own days over its own length (365 or 366), so leap years are
+      handled exactly. It is a good choice for irregular cash flows. It does *not*
+      match Excel's `YEARFRAC(_, 1)`, which uses an average year length instead.
+    * `:thirty_360` is the **US/NASD** rule, the same as Excel's `DAYS360` in US
+      mode. It does not give the end of February any special treatment. (Another
+      variant, called SIA, does. This library does not include it.)
+    * `:thirty_e_360` also leaves February alone. So `Feb 28 → Mar 1` counts as
+      three days (28 → 30 → 1). That is how the convention is defined, not a bug.
+
+  ## Two dates can give the same result
+
+  Under 30/360, day 31 becomes day 30. So the 30th and the 31st of the same month
+  give the same year fraction. `xirr`/`xnpv` add together flows that land on the
+  same year fraction. If a series has only two flows, on the 30th and the 31st,
+  they become one flow, and the result is `{:error, :insufficient_data}`.
 
   ## Custom conventions
 
-  `:basis` also accepts any **module** implementing this behaviour — a single
-  `year_fraction/3` callback. The third argument carries convention-specific
-  parameters (coupon-period boundaries, frequency, a maturity flag) that methods
-  like Actual/Actual ICMA or 30E/360 ISDA need; the built-in static conventions
-  ignore it.
+  `:basis` also accepts a **module** that implements this behaviour. The module
+  needs one function, `year_fraction/3`. Its third argument is a keyword list of
+  settings, such as payment frequency or a maturity date. Methods like
+  Actual/Actual ICMA or 30E/360 ISDA need these.
+
+  To give your module settings, pass `:basis` as a `{module, settings}` tuple.
+  `xirr`/`xnpv`/`xnfv` then pass `settings` to every `year_fraction/3` call:
+
+      Finance.CashFlow.xirr(flows, basis: {MyApp.ActualActualIcma, frequency: 2})
+
+  A plain module (no tuple) gets `[]`. The built-in conventions take no settings,
+  so a tuple such as `{:thirty_360, []}` raises an error.
 
   Some conventions need a holiday calendar. One example is Brazil's Business/252,
   where the fraction is `business_days(from, to) / 252`, counted against the
@@ -95,17 +106,23 @@ defmodule Finance.DayCount do
   @typedoc "A built-in day-count convention."
   @type builtin :: :actual_365 | :actual_360 | :actual_actual | :thirty_360 | :thirty_e_360
 
-  @typedoc "A `:basis`: a built-in convention or a module implementing `Finance.DayCount`."
-  @type basis :: builtin | module
+  @typedoc """
+  A `:basis`: a built-in convention, a module implementing `Finance.DayCount`, or
+  `{module, settings}` to pass that module a keyword list of settings.
+  """
+  @type basis :: builtin | module | {module, keyword}
 
   @doc "The built-in `:basis` atoms."
   @spec bases() :: [builtin]
   def bases, do: @bases
 
   @doc """
-  The year fraction from `date1` to `date2` under `basis` — a built-in atom or a
-  module implementing `Finance.DayCount`. Assumes `date1 <= date2`. `opts` is
-  passed through to a custom module and ignored by the built-in conventions.
+  The year fraction from `date1` to `date2` under `basis`. Assumes
+  `date1 <= date2`.
+
+  `basis` is a built-in atom, a module implementing `Finance.DayCount`, or a
+  `{module, settings}` tuple. A custom module receives `opts`, merged over the
+  tuple's `settings` when there is one. The built-in conventions ignore `opts`.
 
       iex> Finance.DayCount.year_fraction(~D[2019-01-01], ~D[2020-01-01], :actual_365)
       1.0
@@ -131,6 +148,12 @@ defmodule Finance.DayCount do
 
   def year_fraction(date1, date2, module, opts) when is_atom(module) do
     module.year_fraction(date1, date2, opts)
+  end
+
+  # `{module, settings}`: the settings go to the module, with any `opts` passed
+  # here taking precedence.
+  def year_fraction(date1, date2, {module, settings}, opts) when is_atom(module) do
+    module.year_fraction(date1, date2, Keyword.merge(settings, opts))
   end
 
   # Actual/Actual (ISDA): each calendar year the interval touches contributes its

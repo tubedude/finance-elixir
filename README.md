@@ -46,7 +46,7 @@ Add `finance` to your dependencies in `mix.exs`:
 
 ```elixir
 def deps do
-  [{:finance, "~> 1.7"}]
+  [{:finance, "~> 1.8"}]
 end
 ```
 
@@ -176,6 +176,13 @@ end
 Finance.CashFlow.xirr(flows, basis: MyApp.Business252)
 ```
 
+If your module needs settings, pass `{module, settings}`. The settings go to
+every `year_fraction/3` call:
+
+```elixir
+Finance.CashFlow.xirr(flows, basis: {MyApp.ActualActualIcma, frequency: 2})
+```
+
 Load the market's published holidays (for example, ANBIMA for Brazil) into a
 fixed set of business days, and count against that set. This is better than
 working out holidays at runtime. [`ex_tempo`](https://hex.pm/packages/ex_tempo)
@@ -230,7 +237,7 @@ a rayon thread pool — add it and point `:solver` at it:
 
 ```elixir
 # mix.exs
-{:finance, "~> 1.7"},
+{:finance, "~> 1.8"},
 {:finance_rustler, "~> 0.2"}
 
 # config/config.exs
