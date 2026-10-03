@@ -14,8 +14,28 @@ defmodule Finance.DayCount do
   | `:actual_365`    | Actual/365 Fixed   | days / 365 (the default, matching spreadsheet `XIRR`) |
   | `:actual_360`    | Actual/360         | days / 360 |
   | `:actual_actual` | Actual/Actual ISDA | each calendar year's days over its own length (365 or 366) |
-  | `:thirty_360`    | 30/360 US (NASD)   | 30-day months, day 31 pulled to 30 |
-  | `:thirty_e_360`  | 30E/360 Eurobond   | as 30/360, day 31 pulled to 30 on both ends |
+  | `:thirty_360`    | 30/360 US (NASD)   | every month counts as 30 days, every year as 360; a day 31 is treated as day 30 (US rule below) |
+  | `:thirty_e_360`  | 30E/360 Eurobond   | same, but a day 31 is always treated as day 30 |
+
+  ## How 30/360 counts days
+
+  The 30/360 conventions ignore the real calendar. They count the days between
+  two dates as if every month had 30 days:
+
+      days = 360 * (year2 - year1) + 30 * (month2 - month1) + (day2 - day1)
+
+  and then divide by 360. For example, `Jan 15 → Mar 10` is
+  `30 * 2 + (10 - 15) = 55` days, so the year fraction is `55 / 360`. The real
+  calendar has 54 days between those dates (non-leap year), so the two counts differ.
+
+  The only difference between the US and Eurobond variants is what happens when a
+  date falls on day 31, because "day 31" does not exist in a 30-day month:
+
+    * **US (`:thirty_360`)**: a start date on day 31 becomes day 30. An end date on
+      day 31 becomes day 30 only if the start date is on day 30 or 31. Otherwise it
+      stays 31.
+    * **Eurobond (`:thirty_e_360`)**: a day 31 becomes day 30, on both the start
+      and the end date.
 
   Both "Actual/Actual" and "30/360" name more than one method, so to be precise
   about which ones ship:
@@ -43,13 +63,15 @@ defmodule Finance.DayCount do
   like Actual/Actual ICMA or 30E/360 ISDA need; the built-in static conventions
   ignore it.
 
-  A convention that needs a holiday calendar this dependency-free library can't
-  carry — Brazil's Business/252, where the fraction is `business_days(from, to)
-  / 252` against the ANBIMA calendar — lives in your app. Prefer materializing the
-  market's published holidays into a static business-day set and counting against
-  it (a library like [Tempo](https://hex.pm/packages/ex_tempo) can build that set
-  from an `.ics` file and refresh it when new dates are published) over computing
-  it at runtime:
+  Some conventions need a holiday calendar. One example is Brazil's Business/252,
+  where the fraction is `business_days(from, to) / 252`, counted against the
+  ANBIMA holiday calendar. This library does not include holiday calendars, so
+  you write that module in your app.
+
+  Load the market's published holidays into a fixed set of business days, and
+  count against that set. This is better than working out holidays at runtime.
+  [Tempo](https://hex.pm/packages/ex_tempo) can build the set from an `.ics` file
+  and update it when new dates are published:
 
       defmodule MyApp.Business252 do
         @behaviour Finance.DayCount
@@ -127,21 +149,29 @@ defmodule Finance.DayCount do
 
   defp days_in_year(year), do: if(Calendar.ISO.leap_year?(year), do: 366, else: 365)
 
-  # 30/360 day count: whole months count as 30 days. The day-of-month adjustments
-  # are the only thing that differs between the US and European conventions.
+  # 30/360 day count: returns a whole number of days, counting every month as 30
+  # days and every year as 360. The caller divides it by 360 to get years.
+  # Example: Jan 15 -> Mar 10 is 30 * 2 + (10 - 15) = 55 days.
+  # Day 31 does not exist in a 30-day month, so `adjust/3` first rewrites it to 30.
+  # That rewrite is the only thing that differs between the US and European rules.
   defp thirty(%Date{year: y1, month: m1, day: d1}, %Date{year: y2, month: m2, day: d2}, variant) do
     {d1, d2} = adjust(d1, d2, variant)
     360 * (y2 - y1) + 30 * (m2 - m1) + (d2 - d1)
   end
 
-  # US/NASD: pull a day-31 start to 30; then pull a day-31 end to 30 only when the
-  # start already sits on the 30th. Order matters — the end rule depends on the
-  # adjusted start.
+  # US/NASD:
+  #   1. A start on day 31 becomes day 30.
+  #   2. An end on day 31 becomes day 30 only if the start is now day 30
+  #      (it was 30 or 31 to begin with). Otherwise the end stays 31.
+  # Do step 1 first: step 2 reads the already-adjusted start.
+  # Example: Jan 30 -> Mar 31 counts as Jan 30 -> Mar 30 (60 days), but
+  # Jan 15 -> Mar 31 keeps the 31 (76 days).
   defp adjust(d1, d2, :us) do
     d1 = min(d1, 30)
     {d1, if(d2 == 31 and d1 == 30, do: 30, else: d2)}
   end
 
-  # European (30E/360): pull a day-31 to 30 on both ends, unconditionally.
+  # European (30E/360): a day 31 becomes day 30 on both the start and the end,
+  # whatever the other date is.
   defp adjust(d1, d2, :euro), do: {min(d1, 30), min(d2, 30)}
 end

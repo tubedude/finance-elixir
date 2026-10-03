@@ -50,8 +50,8 @@ def deps do
 end
 ```
 
-If you also want to pass `Decimal` amounts, add `{:decimal, "~> 3.0"}` alongside
-it.
+If you also want to pass `Decimal` amounts, add `{:decimal, "~> 2.0 or ~> 3.0"}`
+alongside it.
 
 ## Usage
 
@@ -125,14 +125,14 @@ Finance.CashFlow.irr([Money.new(:USD, "-1000"), Money.new(:EUR, "1100")])
 Both `Decimal` and `ex_money` are optional — apps that don't use them pull in
 nothing extra (finance reads a `%Money{}`'s amount without depending on it). Plain
 numbers and `Decimal` are currency-neutral, so they never trip the currency check.
-Either way the result comes back as a float: rate-of-return math is inherently
-irrational, so accepting these types is convenience at the call site, not added
-precision in the answer.
+Either way the result comes back as a float. The solver works in floats, so
+passing `Decimal` or `Money` saves you a conversion; it does not make the answer
+more precise.
 
 ### Errors
 
-When the data can't produce a result, `xirr/1` and `xirr/2` return
-`{:error, reason}`, where `reason` is one of:
+When the data can't produce a result, the functions return `{:error, reason}`
+(the `!` variants raise instead). The common reasons are:
 
 | Reason                 | Meaning                                         |
 | ---------------------- | ----------------------------------------------- |
@@ -147,9 +147,9 @@ When the data can't produce a result, `xirr/1` and `xirr/2` return
 ## Day-count conventions
 
 By default `xirr`/`xnpv` measure the time between dates as Actual/365 — the same
-basis as spreadsheet `XIRR`. Instruments quoted under another convention (much
-Brazilian debt is 30/360, not Actual/365) would otherwise silently disagree with
-their term sheet, so the basis is selectable with `:basis`:
+basis as spreadsheet `XIRR`. Many bonds and loans are quoted under a different
+convention, such as 30/360. If you use the wrong one, the result will not match
+the term sheet. Pick the convention with `:basis`:
 
 ```elixir
 Finance.CashFlow.xirr(flows, basis: :thirty_360)
@@ -159,9 +159,10 @@ Five conventions ship built in: `:actual_365` (default), `:actual_360`,
 `:actual_actual` (ISDA), `:thirty_360` (US/NASD), and `:thirty_e_360` (Eurobond).
 See `Finance.DayCount`.
 
-`:basis` also takes any module implementing the `Finance.DayCount` behaviour, so a
-calendar-based convention this dependency-free library can't carry — Brazilian
-Business/252, say — lives in your app:
+`:basis` also takes any module implementing the `Finance.DayCount` behaviour. Use
+this for conventions that need a holiday calendar, such as Brazilian Business/252.
+This library does not include holiday calendars, so you write the module in your
+app:
 
 ```elixir
 defmodule MyApp.Business252 do
@@ -175,10 +176,10 @@ end
 Finance.CashFlow.xirr(flows, basis: MyApp.Business252)
 ```
 
-For a business-day convention, prefer materializing the market's published
-holidays (e.g. ANBIMA for Brazil) into a static business-day set rather than
-computing at runtime — [`ex_tempo`](https://hex.pm/packages/ex_tempo) can build one
-from an `.ics` calendar. See `Finance.DayCount` for the details.
+Load the market's published holidays (for example, ANBIMA for Brazil) into a
+fixed set of business days, and count against that set. This is better than
+working out holidays at runtime. [`ex_tempo`](https://hex.pm/packages/ex_tempo)
+can build the set from an `.ics` calendar. See `Finance.DayCount` for details.
 
 ## Solver
 
@@ -207,9 +208,8 @@ solve, and median time):
 | 60-period loan  | 13 evals · 94 µs             | 16 evals · 72 µs   | 44 evals · 256 µs         | 65 evals · 335 µs |
 | 480-period loan | 31 evals · 1.5 ms            | 24 evals · 0.86 ms | 265 evals · 11.6 ms       | 65 evals · 2.3 ms |
 
-Safeguarded Newton is the default all-rounder — fastest or near-fastest across
-the board, and its bracket always encloses a sign change so the result is a
-genuine root. `Finance.Solver.Brent` ties it on the shortest flows and pulls
+Safeguarded Newton is the default because it is fastest or near-fastest on every
+set. `Finance.Solver.Brent` ties it on the shortest flows and pulls
 ahead as they lengthen (~1.3× faster on the medium loan, ~1.7× on the long one),
 because it spends one evaluation per step instead of two. Plain Newton edges both
 out on the tiny set but burns its whole iteration budget on long flows before a
