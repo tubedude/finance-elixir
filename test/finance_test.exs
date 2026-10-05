@@ -2251,6 +2251,215 @@ defmodule FinanceTest do
     end
   end
 
+  describe "TVM.accrue/5" do
+    test "a single rate matches fv with one payment-free period count" do
+      rates = [{~D[2021-01-01], 0.1}]
+      assert {:ok, value} = Finance.TVM.accrue(100, rates, ~D[2021-01-01], ~D[2023-01-01])
+      assert {:ok, expected} = Finance.TVM.fv(0.1, 2 * 365 / 365, 0, -100)
+      assert_in_delta value, expected, 1.0e-6
+    end
+
+    test "splits the span at each rate change" do
+      rates = [{~D[2021-01-01], 0.1}, {~D[2021-07-01], 0.2}]
+
+      expected =
+        100 * :math.pow(1.1, 181 / 365) * :math.pow(1.2, 184 / 365)
+
+      assert {:ok, value} =
+               Finance.TVM.accrue(100, rates, ~D[2021-01-01], ~D[2022-01-01], precision: 10)
+
+      assert_in_delta value, expected, 1.0e-9
+    end
+
+    test "unsorted rates give the same result as sorted ones" do
+      rates = [{~D[2021-07-01], 0.2}, {~D[2021-01-01], 0.1}]
+      sorted = Enum.sort(rates)
+      args = [~D[2021-01-01], ~D[2022-01-01]]
+
+      assert Finance.TVM.accrue(100, rates, Enum.at(args, 0), Enum.at(args, 1)) ==
+               Finance.TVM.accrue(100, sorted, Enum.at(args, 0), Enum.at(args, 1))
+    end
+
+    test "uses the rate in force on `from` and ignores changes after `to`" do
+      rates = [{~D[2020-01-01], 0.1}, {~D[2021-01-01], 0.5}, {~D[2022-01-01], 0.9}]
+
+      assert Finance.TVM.accrue(100, rates, ~D[2020-06-01], ~D[2021-01-01]) ==
+               Finance.TVM.accrue(100, [{~D[2020-01-01], 0.1}], ~D[2020-06-01], ~D[2021-01-01])
+
+      assert Finance.TVM.accrue(100, rates, ~D[2021-01-01], ~D[2022-01-01]) ==
+               Finance.TVM.accrue(100, [{~D[2021-01-01], 0.5}], ~D[2021-01-01], ~D[2022-01-01])
+    end
+
+    test "returns the amount unchanged when from equals to" do
+      assert Finance.TVM.accrue(100, [{~D[2021-01-01], 0.1}], ~D[2021-01-01], ~D[2021-01-01]) ==
+               {:ok, 100.0}
+    end
+
+    test "applies the :basis to every stretch" do
+      rates = [{~D[2021-01-01], 0.1}]
+
+      assert {:ok, value} =
+               Finance.TVM.accrue(100, rates, ~D[2021-01-01], ~D[2021-10-28],
+                 basis: {SizedYear, days: 300},
+                 precision: 10
+               )
+
+      assert_in_delta value, 100 * :math.pow(1.1, 300 / 300), 1.0e-9
+    end
+
+    test "accepts Decimal and Money amounts" do
+      rates = [{~D[2021-01-01], 0.1}]
+      from = ~D[2021-01-01]
+      to = ~D[2022-01-01]
+
+      assert {:ok, 110.0} = Finance.TVM.accrue(Decimal.new(100), rates, from, to)
+      assert {:ok, 110.0} = Finance.TVM.accrue(money(:USD, 100), rates, from, to)
+    end
+
+    test "handles zero and valid negative rates" do
+      from = ~D[2021-01-01]
+      to = ~D[2022-01-01]
+
+      assert Finance.TVM.accrue(100, [{~D[2021-01-01], 0.0}], from, to) == {:ok, 100.0}
+
+      assert {:ok, value} = Finance.TVM.accrue(100, [{~D[2021-01-01], -0.05}], from, to)
+      assert_in_delta value, 95.0, 1.0e-9
+    end
+
+    test "handles zero and negative amounts" do
+      rates = [{~D[2021-01-01], 0.1}]
+      from = ~D[2021-01-01]
+      to = ~D[2022-01-01]
+
+      assert Finance.TVM.accrue(0, rates, from, to) == {:ok, 0.0}
+      assert Finance.TVM.accrue(-100, rates, from, to) == {:ok, -110.0}
+    end
+
+    test "ignores rate changes on or after `to` and superseded rates before `from`" do
+      rates = [
+        # superseded rate before `from` (even if otherwise invalid)
+        {~D[2019-01-01], -2.0},
+        # rate in force at `from`
+        {~D[2020-01-01], 0.10},
+        # rate change exactly on `to` (ignored)
+        {~D[2022-01-01], 0.50},
+        # future rate after `to` (even if otherwise invalid)
+        {~D[2023-01-01], -2.0}
+      ]
+
+      assert {:ok, value} = Finance.TVM.accrue(100, rates, ~D[2021-01-01], ~D[2022-01-01])
+      assert_in_delta value, 110.0, 1.0e-9
+    end
+
+    test "validates options" do
+      rates = [{~D[2021-01-01], 0.1}]
+
+      assert_raise NimbleOptions.ValidationError, fn ->
+        Finance.TVM.accrue(100, rates, ~D[2021-01-01], ~D[2022-01-01], invalid_option: true)
+      end
+
+      assert_raise NimbleOptions.ValidationError, fn ->
+        Finance.TVM.accrue(100, rates, ~D[2021-01-01], ~D[2022-01-01], precision: 20)
+      end
+    end
+
+    test "errors on bad input" do
+      rates = [{~D[2021-01-01], 0.1}]
+
+      assert Finance.TVM.accrue(100, rates, ~D[2022-01-01], ~D[2021-01-01]) ==
+               {:error, :invalid_date}
+
+      assert Finance.TVM.accrue(100, [], ~D[2021-01-01], ~D[2022-01-01]) ==
+               {:error, :insufficient_data}
+
+      assert Finance.TVM.accrue(100, rates, ~D[2020-01-01], ~D[2022-01-01]) ==
+               {:error, :insufficient_data}
+
+      assert Finance.TVM.accrue(100, [{~D[2021-01-01], -1.0}], ~D[2021-01-01], ~D[2022-01-01]) ==
+               {:error, :undefined}
+
+      assert Finance.TVM.accrue(
+               1.0e300,
+               [{~D[2021-01-01], 1.0e10}],
+               ~D[2021-01-01],
+               ~D[2022-01-01]
+             ) ==
+               {:error, :undefined}
+    end
+
+    test "accrue!/5 unwraps or raises" do
+      assert Finance.TVM.accrue!(100, [{~D[2021-01-01], 0.1}], ~D[2021-01-01], ~D[2022-01-01]) ==
+               110.0
+
+      assert_raise ArgumentError, fn ->
+        Finance.TVM.accrue!(100, [], ~D[2021-01-01], ~D[2022-01-01])
+      end
+    end
+
+    property "splitting a constant rate at any date does not change the result" do
+      check all(
+              rate <- float(min: 0.0, max: 1.0),
+              split <- integer(1..1000)
+            ) do
+        from = ~D[2020-01-01]
+        to = ~D[2023-01-01]
+        mid = Date.add(from, split)
+
+        {:ok, whole} = Finance.TVM.accrue(100, [{from, rate}], from, to, precision: 8)
+
+        {:ok, parts} =
+          Finance.TVM.accrue(100, [{from, rate}, {mid, rate}], from, to, precision: 8)
+
+        assert_in_delta whole, parts, 1.0e-6
+      end
+    end
+
+    property "accruing over [from, mid] and then [mid, to] matches accruing over [from, to]" do
+      check all(
+              r1 <- float(min: 0.01, max: 0.5),
+              r2 <- float(min: 0.01, max: 0.5),
+              d1 <- integer(1..200),
+              d2 <- integer(1..200)
+            ) do
+        from = ~D[2020-01-01]
+        mid = Date.add(from, d1)
+        to = Date.add(mid, d2)
+
+        rates = [{from, r1}, {mid, r2}]
+
+        {:ok, step1} = Finance.TVM.accrue(100, rates, from, mid, precision: 10)
+        {:ok, step2} = Finance.TVM.accrue(step1, rates, mid, to, precision: 10)
+        {:ok, direct} = Finance.TVM.accrue(100, rates, from, to, precision: 10)
+
+        assert_in_delta step2, direct, 1.0e-6
+      end
+    end
+  end
+
+  describe "TVM.fv_schedule/3" do
+    test "multiplies the growth of each period" do
+      assert Finance.TVM.fv_schedule(1000, [0.09, 0.11, 0.10]) == {:ok, 1330.89}
+      assert Finance.TVM.fv_schedule(Decimal.new(100), [0.1]) == {:ok, 110.0}
+    end
+
+    test "equal rates match fv" do
+      assert {:ok, scheduled} = Finance.TVM.fv_schedule(1000, List.duplicate(0.05, 10))
+      assert {:ok, level} = Finance.TVM.fv(0.05, 10, 0, -1000)
+      assert_in_delta scheduled, level, 1.0e-6
+    end
+
+    test "errors on bad input" do
+      assert Finance.TVM.fv_schedule(100, []) == {:error, :insufficient_data}
+      assert Finance.TVM.fv_schedule(100, [0.1, -1.0]) == {:error, :undefined}
+      assert Finance.TVM.fv_schedule(1.0e300, [1.0e10, 1.0e10]) == {:error, :undefined}
+    end
+
+    test "fv_schedule!/3 unwraps or raises" do
+      assert Finance.TVM.fv_schedule!(100, [0.1]) == 110.0
+      assert_raise ArgumentError, fn -> Finance.TVM.fv_schedule!(100, []) end
+    end
+  end
+
   # Present value of `{amount, period}` pairs at `rate`: Σ amount / (1 + rate)^period.
   defp present_value_at(rate, indexed_flows) do
     Enum.reduce(indexed_flows, 0.0, fn {amount, t}, acc ->
