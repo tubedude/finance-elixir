@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.9.0 — 2026-10-05
+
+### Added
+- `Finance.TVM.accrue/4,5` (+ `accrue!`) — grows an amount from one date to
+  another while the rate changes. Each stretch between rate changes compounds by
+  `(1 + rate)^t`, with `t` from the `:basis` option. With a custom day-count module
+  it can accrue an index that counts business days, such as the Brazilian Selic.
+- `Finance.TVM.fv_schedule/2,3` (+ `fv_schedule!`) — grows an amount through a list
+  of per-period rates (spreadsheet `FVSCHEDULE`).
+
+### Changed
+- Documentation in the README points to [`bizdays`](https://hex.pm/packages/bizdays)
+  alongside `ex_tempo` for Brazilian Business/252 day counts.
+
 ## 1.8.0 — 2026-10-03
 
 ### Added

@@ -11,7 +11,8 @@ defmodule Finance.TVM do
   money you receive is positive, money you pay out is negative.
   """
 
-  import Finance.Shared, only: [unwrap!: 1, options: 2, resolve_solver: 1]
+  import Finance.Shared,
+    only: [unwrap!: 1, options: 2, resolve_solver: 1, to_amount: 1, round_value: 2, safely: 1]
 
   @type rate :: Finance.rate()
   @type option :: Finance.option()
@@ -67,6 +68,141 @@ defmodule Finance.TVM do
   @doc "Same as `fv/5`, but returns the value directly and raises `ArgumentError` on error."
   @spec fv!(number, number, number, number, 0 | 1) :: float
   def fv!(rate, nper, pmt, pv \\ 0.0, type \\ 0), do: rate |> fv(nper, pmt, pv, type) |> unwrap!()
+
+  @doc """
+  Grows `amount` from `from` to `to` while the rate changes along the way.
+
+  `rates` is a list of `{date, rate}`. Each rate is an annual effective rate. It
+  starts on its date and stays in force until the next date. The rate in force on
+  `from` is the latest one dated on or before `from`. Rates dated on or after `to`
+  are ignored, so one rate table can serve many windows.
+
+  Each stretch between two rate changes grows by `(1 + rate)^t`, where `t` is the
+  year fraction from the `:basis` option (Actual/365 by default; see
+  `Finance.DayCount`). The growth factors multiply:
+
+      amount · (1 + r1)^t1 · (1 + r2)^t2 · …
+
+  A custom `:basis` module can count business days against a holiday calendar.
+  This is how an index such as Brazil's Selic accrues.
+
+  Returns `{:error, :insufficient_data}` when no rate is in force on `from`,
+  `{:error, :invalid_date}` when `from` is after `to`, and `{:error, :undefined}`
+  when a rate is at or below -100% or the result is too large for a float.
+  Takes `:precision` and `:basis`.
+
+      iex> rates = [{~D[2021-01-01], 0.10}, {~D[2022-01-01], 0.20}]
+      iex> Finance.TVM.accrue(100, rates, ~D[2021-01-01], ~D[2023-01-01])
+      {:ok, 132.0}
+
+  A rate dated before `from` applies from `from`:
+
+      iex> rates = [{~D[2020-01-01], 0.10}, {~D[2022-01-01], 0.20}]
+      iex> Finance.TVM.accrue(100, rates, ~D[2021-01-01], ~D[2022-01-01])
+      {:ok, 110.0}
+  """
+  @spec accrue(Finance.amount(), [{Date.t(), rate}], Date.t(), Date.t(), [option]) ::
+          {:ok, float} | {:error, error}
+  def accrue(amount, rates, %Date{} = from, %Date{} = to, opts \\ [])
+      when is_list(rates) and is_list(opts) do
+    opts = options(opts, :dated_value)
+
+    with :ok <- check_order(from, to),
+         {:ok, stretches} <- stretches(rates, from, to) do
+      grow(to_amount(amount), stretches, opts)
+    end
+  end
+
+  @doc "Same as `accrue/5`, but returns the value directly and raises `ArgumentError` on error."
+  @spec accrue!(Finance.amount(), [{Date.t(), rate}], Date.t(), Date.t(), [option]) :: float
+  def accrue!(amount, rates, from, to, opts \\ []) do
+    amount |> accrue(rates, from, to, opts) |> unwrap!()
+  end
+
+  @doc """
+  Grows `pv` through a list of per-period rates, one rate for each period. The
+  result is `pv · (1 + r1) · (1 + r2) · …`. Spreadsheets call this `FVSCHEDULE`.
+
+  Use it when the rates are already per period and there are no dates. For rates
+  that change on given dates, use `accrue/5`. Unlike `fv/5`, the sign is not
+  flipped: a positive `pv` grows to a positive value.
+
+  Returns `{:error, :insufficient_data}` for an empty list and
+  `{:error, :undefined}` when a rate is at or below -100% or the result is too
+  large for a float. Takes `:precision`.
+
+      iex> Finance.TVM.fv_schedule(1000, [0.09, 0.11, 0.10])
+      {:ok, 1330.89}
+  """
+  @spec fv_schedule(Finance.amount(), [rate], [option]) :: {:ok, float} | {:error, error}
+  def fv_schedule(pv, rates, opts \\ []) when is_list(rates) and is_list(opts) do
+    opts = options(opts, :value)
+
+    cond do
+      rates == [] -> {:error, :insufficient_data}
+      Enum.any?(rates, &(1 + &1 <= 0)) -> {:error, :undefined}
+      true -> schedule_value(to_amount(pv), rates, opts)
+    end
+  end
+
+  @doc "Same as `fv_schedule/3`, but returns the value directly and raises `ArgumentError` on error."
+  @spec fv_schedule!(Finance.amount(), [rate], [option]) :: float
+  def fv_schedule!(pv, rates, opts \\ []), do: pv |> fv_schedule(rates, opts) |> unwrap!()
+
+  defp schedule_value(pv, rates, opts) do
+    case safely(fn -> chain(pv, rates) end) do
+      :diverged -> {:error, :undefined}
+      value -> {:ok, round_value(value, opts)}
+    end
+  end
+
+  defp chain(pv, rates), do: Enum.reduce(rates, pv, fn rate, acc -> acc * (1 + rate) end)
+
+  defp check_order(from, to) do
+    if Date.after?(from, to), do: {:error, :invalid_date}, else: :ok
+  end
+
+  # Splits `from..to` at each rate change inside it. Returns `{rate, start, stop}`
+  # for every stretch. The first stretch uses the rate in force on `from`.
+  defp stretches(rates, from, to) do
+    sorted = Enum.sort_by(rates, fn {date, _rate} -> date end, Date)
+    {past, future} = Enum.split_while(sorted, fn {date, _} -> not Date.after?(date, from) end)
+
+    case past do
+      [] ->
+        {:error, :insufficient_data}
+
+      _ ->
+        {_date, current} = List.last(past)
+        changes = Enum.take_while(future, fn {date, _} -> Date.before?(date, to) end)
+        starts = [from | Enum.map(changes, fn {date, _} -> date end)]
+        rates_in_force = [current | Enum.map(changes, fn {_, rate} -> rate end)]
+        {:ok, Enum.zip([rates_in_force, starts, tl(starts) ++ [to]])}
+    end
+  end
+
+  defp grow(amount, stretches, opts) do
+    if Enum.any?(stretches, fn {rate, _, _} -> 1 + rate <= 0 end) do
+      {:error, :undefined}
+    else
+      compound(amount, stretches, opts)
+    end
+  end
+
+  defp compound(amount, stretches, opts) do
+    basis = Keyword.fetch!(opts, :basis)
+
+    case safely(fn -> multiply(amount, stretches, basis) end) do
+      :diverged -> {:error, :undefined}
+      value -> {:ok, round_value(value, opts)}
+    end
+  end
+
+  defp multiply(amount, stretches, basis) do
+    Enum.reduce(stretches, amount, fn {rate, start, stop}, acc ->
+      acc * :math.pow(1 + rate, Finance.DayCount.year_fraction(start, stop, basis))
+    end)
+  end
 
   @doc """
   Works out the present value of an investment: what a future stream is worth
