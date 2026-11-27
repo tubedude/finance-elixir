@@ -2,10 +2,10 @@ defmodule Finance.DayCount do
   @moduledoc """
   Day-count conventions — the fraction of a year between two dates.
 
-  Dated cash-flow functions (`Finance.CashFlow.xirr/2`, `xnpv/2`) discount each
-  flow by `(1 + rate)^t`, where `t` is the year fraction from the earliest date to
-  the flow's date. Which fraction to use depends on the market convention the
-  instrument is quoted under, selected with the `:basis` option.
+  Dated cash-flow functions (`Finance.CashFlow.xirr/2`, `xnpv/2`, `xnfv/2`) and
+  `Finance.TVM.accrue/5` discount or compound by `(1 + rate)^t`, where `t` is
+  the year fraction between dates. Which fraction to use depends on the market
+  convention the instrument is quoted under, selected with the `:basis` option.
 
   Five conventions ship built in, named by atom:
 
@@ -67,7 +67,8 @@ defmodule Finance.DayCount do
   Actual/Actual ICMA or 30E/360 ISDA need these.
 
   To give your module settings, pass `:basis` as a `{module, settings}` tuple.
-  `xirr`/`xnpv`/`xnfv` then pass `settings` to every `year_fraction/3` call:
+  `xirr`/`xnpv`/`xnfv`/`accrue` then pass `settings` to every `year_fraction/3`
+  call:
 
       Finance.CashFlow.xirr(flows, basis: {MyApp.ActualActualIcma, frequency: 2})
 

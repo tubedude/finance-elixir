@@ -9,7 +9,7 @@ defmodule Finance do
       (`npv`, `xnpv`, `xnfv`, `irr`, `xirr`, `mirr`), `conventional?`, plus batched
       `irr_many`/`xirr_many`.
     * `Finance.TVM` — time value of money (`pv`, `fv`, `pmt`, `ipmt`, `ppmt`,
-      `nper`, `rate`) and `amortization_schedule`.
+      `nper`, `rate`), `accrue`, `fv_schedule`, and `amortization_schedule`.
     * `Finance.Rates` — rate conversions (`effective_annual_rate`,
       `nominal_rate`, `continuous_to_periodic`).
     * `Finance.Bonds` — fixed income (`price`, `ytm`, `duration`,
@@ -78,6 +78,8 @@ defmodule Finance do
           | :insufficient_data
           | :single_signed_flow
           | :invalid_date
+          | :invalid_date_range
+          | :duplicate_date
           | :did_not_converge
           | :undefined
           | :mixed_currencies

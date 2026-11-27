@@ -7,13 +7,15 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
         include:
+          # OTP 25 has no prebuilt binary for ubuntu-26.04 on builds.hex.pm.
           - elixir: "1.15.8"
             otp: "25.3.2.21"
+            os: ubuntu-24.04
           - elixir: "1.18.4"
             otp: "27.3.4.13"
           - elixir: "1.20.1"
@@ -44,6 +46,8 @@ jobs:
       - run: mix format --check-formatted
         if: matrix.lint
       - run: mix credo --strict
+        if: matrix.lint
+      - run: mix hex.audit
         if: matrix.lint
       - run: mix test
 

@@ -36,7 +36,7 @@ defmodule Finance.Shared do
       type: {:custom, __MODULE__, :validate_basis, []},
       default: :actual_365,
       doc:
-        "day-count convention for dated flows (`xirr`/`xnpv`/`xnfv`): a built-in atom, a module implementing `Finance.DayCount`, or `{module, opts}` to pass that module settings (see `Finance.DayCount`)"
+        "day-count convention for dated functions (`xirr`/`xnpv`/`xnfv`/`accrue`): a built-in atom, a module implementing `Finance.DayCount`, or `{module, opts}` to pass that module settings (see `Finance.DayCount`)"
     ]
   ]
 
@@ -50,9 +50,9 @@ defmodule Finance.Shared do
     dated_rate: NimbleOptions.new!(@option_definitions),
     # periodic/undated rate solve: irr, irr_many, TVM.rate, Bonds.ytm
     rate: NimbleOptions.new!(Keyword.take(@option_definitions, @solver_keys)),
-    # dated value: xnpv, xnfv
+    # dated value: xnpv, xnfv, TVM.accrue
     dated_value: NimbleOptions.new!(Keyword.take(@option_definitions, [:precision, :basis])),
-    # closed-form value: npv, mirr, Bonds price and risk metrics
+    # closed-form value: npv, mirr, TVM.fv_schedule, Bonds price and risk metrics
     value: NimbleOptions.new!(Keyword.take(@option_definitions, [:precision]))
   }
 
@@ -124,6 +124,17 @@ defmodule Finance.Shared do
   @spec unwrap!({:ok, value} | {:error, atom}) :: value when value: var
   def unwrap!({:ok, value}), do: value
   def unwrap!({:error, reason}), do: raise(ArgumentError, "could not compute: #{reason}")
+
+  @doc "Normalize a `Date` struct or `{year, month, day}` tuple to `{:ok, %Date{}}`."
+  @spec to_date(Finance.date()) :: {:ok, Date.t()} | {:error, :invalid_date}
+  def to_date(%Date{} = date), do: {:ok, date}
+
+  def to_date({y, m, d}) do
+    case Date.from_erl({y, m, d}) do
+      {:ok, date} -> {:ok, date}
+      {:error, _reason} -> {:error, :invalid_date}
+    end
+  end
 
   @doc """
   Coerce a cash-flow amount to a float. Accepts plain numbers, `%Decimal{}`

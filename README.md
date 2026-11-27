@@ -17,7 +17,7 @@ The functions are organised into domain modules:
   (`npv`, `xnpv`, `xnfv`, `irr`, `xirr`, `mirr`), `conventional?`, plus batched
   `irr_many`/`xirr_many`.
 - `Finance.TVM` — time-value-of-money scalars (`pv`, `fv`, `pmt`, `ipmt`, `ppmt`,
-  `nper`, `rate`) plus `amortization_schedule`.
+  `nper`, `rate`), `accrue`, `fv_schedule`, plus `amortization_schedule`.
 - `Finance.Rates` — rate conversions (`effective_annual_rate`, `nominal_rate`,
   `continuous_to_periodic`).
 - `Finance.Bonds` — fixed income (`price`, `ytm`, `duration`,
@@ -46,7 +46,7 @@ Add `finance` to your dependencies in `mix.exs`:
 
 ```elixir
 def deps do
-  [{:finance, "~> 1.8"}]
+  [{:finance, "~> 1.9"}]
 end
 ```
 
@@ -139,17 +139,20 @@ When the data can't produce a result, the functions return `{:error, reason}`
 | `:mismatched_lengths`  | date and amount lists differ in length          |
 | `:insufficient_data`   | fewer than two distinct-date flows              |
 | `:single_signed_flow`  | all amounts have the same sign                   |
-| `:invalid_date`        | a date could not be parsed                       |
-| `:did_not_converge`    | no rate found within the iteration limit         |
+| `:invalid_date`        | a date could not be parsed                                       |
+| `:invalid_date_range`  | start date is after end date                                     |
+| `:duplicate_date`      | a rate schedule contains the same date more than once            |
+| `:did_not_converge`    | no rate found within the iteration limit                         |
 | `:undefined`           | inputs outside the function's domain, e.g. a rate at or below −100% |
-| `:mixed_currencies`    | a series mixes two or more `%Money{}` currencies |
+| `:mixed_currencies`    | a series mixes two or more `%Money{}` currencies                 |
 
 ## Day-count conventions
 
-By default `xirr`/`xnpv` measure the time between dates as Actual/365 — the same
-basis as spreadsheet `XIRR`. Many bonds and loans are quoted under a different
-convention, such as 30/360. If you use the wrong one, the result will not match
-the term sheet. Pick the convention with `:basis`:
+By default `xirr`/`xnpv`/`xnfv` and `Finance.TVM.accrue/5` measure the time
+between dates as Actual/365 — the same basis as spreadsheet `XIRR`. Many bonds
+and loans are quoted under a different convention, such as 30/360. If you use
+the wrong one, the result will not match the term sheet. Pick the convention
+with `:basis`:
 
 ```elixir
 Finance.CashFlow.xirr(flows, basis: :thirty_360)
@@ -167,9 +170,12 @@ app:
 ```elixir
 defmodule MyApp.Business252 do
   @behaviour Finance.DayCount
+
+  @calendar Bizdays.anbima()
+
   @impl true
   def year_fraction(from, to, _opts) do
-    MyApp.Holidays.business_days_between(from, to) / 252
+    Bizdays.count(@calendar, from, to) / 252
   end
 end
 
@@ -183,10 +189,10 @@ every `year_fraction/3` call:
 Finance.CashFlow.xirr(flows, basis: {MyApp.ActualActualIcma, frequency: 2})
 ```
 
-Load the market's published holidays (for example, ANBIMA for Brazil) into a
-fixed set of business days, and count against that set. This is better than
-working out holidays at runtime. [`ex_tempo`](https://hex.pm/packages/ex_tempo)
-can build the set from an `.ics` calendar. See `Finance.DayCount` for details.
+[`bizdays`](https://hex.pm/packages/bizdays) provides the Brazilian ANBIMA calendar.
+Alternatively,
+[`ex_tempo`](https://hex.pm/packages/ex_tempo) can build a business-day set from an
+`.ics` calendar. See `Finance.DayCount` for details.
 
 ## Solver
 
@@ -237,7 +243,7 @@ a rayon thread pool — add it and point `:solver` at it:
 
 ```elixir
 # mix.exs
-{:finance, "~> 1.8"},
+{:finance, "~> 1.9"},
 {:finance_rustler, "~> 0.2"}
 
 # config/config.exs
