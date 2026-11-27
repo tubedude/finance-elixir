@@ -1,12 +1,14 @@
 # Changelog
 
-## 1.9.0 — 2026-10-05
+## 1.9.0 — 2026-11-27
 
 ### Added
 - `Finance.TVM.accrue/4,5` (+ `accrue!`) — grows an amount from one date to
   another while the rate changes. Each stretch between rate changes compounds by
-  `(1 + rate)^t`, with `t` from the `:basis` option. With a custom day-count module
-  it can accrue an index that counts business days, such as the Brazilian Selic.
+  `(1 + rate)^t`, with `t` from the `:basis` option. Accepts `Date` structs or
+  `{year, month, day}` tuples, rejects reversed ranges (`:invalid_date_range`)
+  and duplicate dates (`:duplicate_date`), and with a custom day-count module
+  can accrue an index that counts business days, such as the Brazilian Selic.
 - `Finance.TVM.fv_schedule/2,3` (+ `fv_schedule!`) — grows an amount through a list
   of per-period rates (spreadsheet `FVSCHEDULE`).
 
