@@ -2272,12 +2272,25 @@ defmodule FinanceTest do
     end
 
     test "unsorted rates give the same result as sorted ones" do
-      rates = [{~D[2021-07-01], 0.2}, {~D[2021-01-01], 0.1}]
-      sorted = Enum.sort(rates)
-      args = [~D[2021-01-01], ~D[2022-01-01]]
+      rates = [{~D[2021-07-01], 0.2}, {~D[2021-01-15], 0.1}]
+      sorted = Enum.sort_by(rates, &elem(&1, 0), Date)
+      from = ~D[2021-01-15]
+      to = ~D[2022-01-15]
 
-      assert Finance.TVM.accrue(100, rates, Enum.at(args, 0), Enum.at(args, 1)) ==
-               Finance.TVM.accrue(100, sorted, Enum.at(args, 0), Enum.at(args, 1))
+      assert Finance.TVM.accrue(100, rates, from, to) ==
+               Finance.TVM.accrue(100, sorted, from, to)
+    end
+
+    test "accepts Erlang {year, month, day} date tuples" do
+      rates = [{{2021, 1, 1}, 0.1}, {~D[2021-07-01], 0.2}]
+
+      assert Finance.TVM.accrue(100, rates, {2021, 1, 1}, {2022, 1, 1}) ==
+               Finance.TVM.accrue(
+                 100,
+                 [{~D[2021-01-01], 0.1}, {~D[2021-07-01], 0.2}],
+                 ~D[2021-01-01],
+                 ~D[2022-01-01]
+               )
     end
 
     test "uses the rate in force on `from` and ignores changes after `to`" do
@@ -2296,7 +2309,10 @@ defmodule FinanceTest do
     end
 
     test "applies the :basis to every stretch" do
-      rates = [{~D[2021-01-01], 0.1}]
+      rates = [{~D[2021-01-01], 0.1}, {~D[2021-06-01], 0.2}]
+
+      expected =
+        100 * :math.pow(1.1, 151 / 300) * :math.pow(1.2, 149 / 300)
 
       assert {:ok, value} =
                Finance.TVM.accrue(100, rates, ~D[2021-01-01], ~D[2021-10-28],
@@ -2304,7 +2320,7 @@ defmodule FinanceTest do
                  precision: 10
                )
 
-      assert_in_delta value, 100 * :math.pow(1.1, 300 / 300), 1.0e-9
+      assert_in_delta value, expected, 1.0e-9
     end
 
     test "accepts Decimal and Money amounts" do
@@ -2316,11 +2332,12 @@ defmodule FinanceTest do
       assert {:ok, 110.0} = Finance.TVM.accrue(money(:USD, 100), rates, from, to)
     end
 
-    test "handles zero and valid negative rates" do
+    test "handles zero, integer, and valid negative rates" do
       from = ~D[2021-01-01]
       to = ~D[2022-01-01]
 
-      assert Finance.TVM.accrue(100, [{~D[2021-01-01], 0.0}], from, to) == {:ok, 100.0}
+      assert Finance.TVM.accrue(100, [{~D[2021-01-01], 0}], from, to) == {:ok, 100.0}
+      assert Finance.TVM.accrue(100, [{~D[2021-01-01], 1}], from, to) == {:ok, 200.0}
 
       assert {:ok, value} = Finance.TVM.accrue(100, [{~D[2021-01-01], -0.05}], from, to)
       assert_in_delta value, 95.0, 1.0e-9
@@ -2367,7 +2384,30 @@ defmodule FinanceTest do
       rates = [{~D[2021-01-01], 0.1}]
 
       assert Finance.TVM.accrue(100, rates, ~D[2022-01-01], ~D[2021-01-01]) ==
+               {:error, :invalid_date_range}
+
+      assert Finance.TVM.accrue(100, rates, {2021, 2, 30}, ~D[2022-01-01]) ==
                {:error, :invalid_date}
+
+      assert Finance.TVM.accrue(100, rates, ~D[2021-01-01], {2022, 2, 30}) ==
+               {:error, :invalid_date}
+
+      assert Finance.TVM.accrue(100, [{{2021, 2, 30}, 0.1}], ~D[2021-01-01], ~D[2022-01-01]) ==
+               {:error, :invalid_date}
+
+      assert Finance.TVM.accrue(
+               100,
+               [{~D[2021-01-01], 0.1}, {~D[2021-07-01], 0.2}, {~D[2021-07-01], 0.3}],
+               ~D[2021-01-01],
+               ~D[2022-01-01]
+             ) == {:error, :duplicate_date}
+
+      assert Finance.TVM.accrue(
+               100,
+               [{~D[2021-01-01], 0.1}, {{2021, 1, 1}, 0.2}],
+               ~D[2021-01-01],
+               ~D[2022-01-01]
+             ) == {:error, :duplicate_date}
 
       assert Finance.TVM.accrue(100, [], ~D[2021-01-01], ~D[2022-01-01]) ==
                {:error, :insufficient_data}
@@ -2440,12 +2480,32 @@ defmodule FinanceTest do
     test "multiplies the growth of each period" do
       assert Finance.TVM.fv_schedule(1000, [0.09, 0.11, 0.10]) == {:ok, 1330.89}
       assert Finance.TVM.fv_schedule(Decimal.new(100), [0.1]) == {:ok, 110.0}
+      assert Finance.TVM.fv_schedule(money(:USD, 100), [0.1]) == {:ok, 110.0}
     end
 
     test "equal rates match fv" do
       assert {:ok, scheduled} = Finance.TVM.fv_schedule(1000, List.duplicate(0.05, 10))
       assert {:ok, level} = Finance.TVM.fv(0.05, 10, 0, -1000)
       assert_in_delta scheduled, level, 1.0e-6
+    end
+
+    test "handles zero, integer, negative rates, and negative amounts" do
+      assert Finance.TVM.fv_schedule(100, [0, 1]) == {:ok, 200.0}
+      assert Finance.TVM.fv_schedule(100, [0.1, -0.05]) == {:ok, 104.5}
+      assert Finance.TVM.fv_schedule(-100, [0.1]) == {:ok, -110.0}
+      assert Finance.TVM.fv_schedule(0, [0.1]) == {:ok, 0.0}
+    end
+
+    test "respects :precision and validates options" do
+      assert Finance.TVM.fv_schedule(1000, [0.09, 0.11, 0.10], precision: 1) == {:ok, 1330.9}
+
+      assert_raise NimbleOptions.ValidationError, fn ->
+        Finance.TVM.fv_schedule(100, [0.1], invalid_option: true)
+      end
+
+      assert_raise NimbleOptions.ValidationError, fn ->
+        Finance.TVM.fv_schedule(100, [0.1], precision: 20)
+      end
     end
 
     test "errors on bad input" do

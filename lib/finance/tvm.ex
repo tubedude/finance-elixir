@@ -1,19 +1,32 @@
 defmodule Finance.TVM do
   @moduledoc """
-  Time-value-of-money scalars: `fv/5`, `pv/5`, `pmt/5`, `nper/5`, and `rate/6`.
+  Time-value-of-money calculations: annuity scalars (`fv/5`, `pv/5`, `pmt/5`,
+  `ipmt/6`, `ppmt/6`, `nper/5`, `rate/6`), loan `amortization_schedule/4`, and
+  variable-rate growth (`accrue/5`, `fv_schedule/3`).
 
-  Each solves the standard annuity equation for one unknown:
+  The annuity scalars solve the standard annuity equation for one unknown:
 
       pv·(1+r)^n + pmt·(1 + r·type)·((1+r)^n − 1)/r + fv = 0
 
   `type` is `0` for payments at the end of each period (ordinary annuity) or `1`
-  for the beginning (annuity due). The sign convention follows spreadsheets:
-  money you receive is positive, money you pay out is negative.
+  for the beginning (annuity due). The annuity functions and amortization
+  schedule follow the spreadsheet sign convention: money you receive is
+  positive, money you pay out is negative. `accrue/5` and `fv_schedule/3` grow
+  an amount forward directly without flipping its sign.
   """
 
   import Finance.Shared,
-    only: [unwrap!: 1, options: 2, resolve_solver: 1, to_amount: 1, round_value: 2, safely: 1]
+    only: [
+      unwrap!: 1,
+      options: 2,
+      resolve_solver: 1,
+      to_amount: 1,
+      to_date: 1,
+      round_value: 2,
+      safely: 1
+    ]
 
+  @type date :: Finance.date()
   @type rate :: Finance.rate()
   @type option :: Finance.option()
   @type error :: Finance.error()
@@ -75,7 +88,9 @@ defmodule Finance.TVM do
   `rates` is a list of `{date, rate}`. Each rate is an annual effective rate. It
   starts on its date and stays in force until the next date. The rate in force on
   `from` is the latest one dated on or before `from`. Rates dated on or after `to`
-  are ignored, so one rate table can serve many windows.
+  are ignored, so one rate table can serve many windows. Dates may be `Date`
+  structs or `{year, month, day}` tuples. Unlike `fv/5`, the sign is not flipped:
+  a positive `amount` grows to a positive value.
 
   Each stretch between two rate changes grows by `(1 + rate)^t`, where `t` is the
   year fraction from the `:basis` option (Actual/365 by default; see
@@ -87,9 +102,11 @@ defmodule Finance.TVM do
   This is how an index such as Brazil's Selic accrues.
 
   Returns `{:error, :insufficient_data}` when no rate is in force on `from`,
-  `{:error, :invalid_date}` when `from` is after `to`, and `{:error, :undefined}`
-  when a rate is at or below -100% or the result is too large for a float.
-  Takes `:precision` and `:basis`.
+  `{:error, :invalid_date}` when a date tuple cannot be parsed,
+  `{:error, :invalid_date_range}` when `from` is after `to`,
+  `{:error, :duplicate_date}` when `rates` contains the same date more than once,
+  and `{:error, :undefined}` when a rate is at or below -100% or the result is
+  too large for a float. Takes `:precision` and `:basis`.
 
       iex> rates = [{~D[2021-01-01], 0.10}, {~D[2022-01-01], 0.20}]
       iex> Finance.TVM.accrue(100, rates, ~D[2021-01-01], ~D[2023-01-01])
@@ -101,20 +118,24 @@ defmodule Finance.TVM do
       iex> Finance.TVM.accrue(100, rates, ~D[2021-01-01], ~D[2022-01-01])
       {:ok, 110.0}
   """
-  @spec accrue(Finance.amount(), [{Date.t(), rate}], Date.t(), Date.t(), [option]) ::
+  @spec accrue(Finance.amount(), [{date, number}], date, date, [option]) ::
           {:ok, float} | {:error, error}
-  def accrue(amount, rates, %Date{} = from, %Date{} = to, opts \\ [])
+  def accrue(amount, rates, from, to, opts \\ [])
       when is_list(rates) and is_list(opts) do
     opts = options(opts, :dated_value)
 
-    with :ok <- check_order(from, to),
-         {:ok, stretches} <- stretches(rates, from, to) do
+    with {:ok, from} <- to_date(from),
+         {:ok, to} <- to_date(to),
+         :ok <- check_order(from, to),
+         {:ok, parsed_rates} <- parse_rates(rates),
+         :ok <- check_unique_dates(parsed_rates),
+         {:ok, stretches} <- stretches(parsed_rates, from, to) do
       grow(to_amount(amount), stretches, opts)
     end
   end
 
   @doc "Same as `accrue/5`, but returns the value directly and raises `ArgumentError` on error."
-  @spec accrue!(Finance.amount(), [{Date.t(), rate}], Date.t(), Date.t(), [option]) :: float
+  @spec accrue!(Finance.amount(), [{date, number}], date, date, [option]) :: float
   def accrue!(amount, rates, from, to, opts \\ []) do
     amount |> accrue(rates, from, to, opts) |> unwrap!()
   end
@@ -134,7 +155,7 @@ defmodule Finance.TVM do
       iex> Finance.TVM.fv_schedule(1000, [0.09, 0.11, 0.10])
       {:ok, 1330.89}
   """
-  @spec fv_schedule(Finance.amount(), [rate], [option]) :: {:ok, float} | {:error, error}
+  @spec fv_schedule(Finance.amount(), [number], [option]) :: {:ok, float} | {:error, error}
   def fv_schedule(pv, rates, opts \\ []) when is_list(rates) and is_list(opts) do
     opts = options(opts, :value)
 
@@ -146,7 +167,7 @@ defmodule Finance.TVM do
   end
 
   @doc "Same as `fv_schedule/3`, but returns the value directly and raises `ArgumentError` on error."
-  @spec fv_schedule!(Finance.amount(), [rate], [option]) :: float
+  @spec fv_schedule!(Finance.amount(), [number], [option]) :: float
   def fv_schedule!(pv, rates, opts \\ []), do: pv |> fv_schedule(rates, opts) |> unwrap!()
 
   defp schedule_value(pv, rates, opts) do
@@ -159,7 +180,22 @@ defmodule Finance.TVM do
   defp chain(pv, rates), do: Enum.reduce(rates, pv, fn rate, acc -> acc * (1 + rate) end)
 
   defp check_order(from, to) do
-    if Date.after?(from, to), do: {:error, :invalid_date}, else: :ok
+    if Date.after?(from, to), do: {:error, :invalid_date_range}, else: :ok
+  end
+
+  defp parse_rates(rates) do
+    Enum.reduce_while(rates, {:ok, []}, fn {date, rate}, {:ok, acc} ->
+      case to_date(date) do
+        {:ok, parsed_date} -> {:cont, {:ok, [{parsed_date, rate} | acc]}}
+        {:error, :invalid_date} -> {:halt, {:error, :invalid_date}}
+      end
+    end)
+  end
+
+  defp check_unique_dates(rates) do
+    if length(Enum.uniq_by(rates, &elem(&1, 0))) == length(rates),
+      do: :ok,
+      else: {:error, :duplicate_date}
   end
 
   # Splits `from..to` at each rate change inside it. Returns `{rate, start, stop}`

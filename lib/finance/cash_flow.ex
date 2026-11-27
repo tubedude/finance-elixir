@@ -27,6 +27,7 @@ defmodule Finance.CashFlow do
   import Finance.Shared,
     only: [
       to_amount: 1,
+      to_date: 1,
       round_value: 2,
       unwrap!: 1,
       safely: 1,
@@ -514,9 +515,6 @@ defmodule Finance.CashFlow do
     |> Enum.with_index()
     |> Enum.map(fn {amount, index} -> {index / 1, to_amount(amount)} end)
   end
-
-  defp to_date(%Date{} = date), do: {:ok, date}
-  defp to_date({y, m, d}), do: Date.from_erl({y, m, d})
 
   defp validate([_, _ | _] = flows) do
     if signed_both_ways?(Enum.map(flows, &elem(&1, 1))),
